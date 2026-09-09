@@ -17,5 +17,7 @@ Stored in `strategies` (id + version). Do not overwrite a historical version.
 | `smart_money_follow_v1` | Repeated large prints | Wallets start as `unknown` |
 | `momentum_fade_v2` | 1h reversal after an extended 24h | Sell / exit |
 | `exit_*_v2` | Stop, take, trail, time, regime, macro | Inventory management |
+| `event_*` (new) | Monitored-entity catalyst detected | Confidence = impact × credibility × freshness |
+| `copy_wallet_*` (new) | Polymarket wallet print | **Dashboard only** — never auto-executed |
 
-Entry, exit, risk and confidence live in `params` JSON. Paper broker still applies global risk limits.
+Entry, exit, risk and confidence live in `params` JSON. Paper broker still applies global risk limits. Signal deduplication now includes `strategy_version` so a new version can regenerate an updated signal.

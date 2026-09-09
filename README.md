@@ -9,13 +9,13 @@ Private repo: [github.com/Bleuszz/autonomous-crypto-intelligence](https://github
 ## What it does
 
 - Discovers listed majors (CoinGecko) and newly liquid DEX pools (DexScreener, GeckoTerminal)
-- Scores opportunities with explainable weights (liquidity, momentum, volume anomaly, news, social proxy, wallet prints, risk penalty)
+- Scores opportunities with explainable weights (liquidity, momentum, volume anomaly, news, social proxy, wallet prints, risk penalty) and source-reliability discounting
 - Flags rug / honeypot / mint / tax characteristics via GoPlus where the chain is supported
-- Ingests breaking news with NEW / RECENT / STALE bands
-- Reads Polymarket as an information source (no causation assumed)
-- Generates versioned strategy signals
-- Paper-trades with latency, impact, fees and gas
-- Walk-forward backtests on Kraken daily candles (no look-ahead)
+- Ingests breaking news with NEW / RECENT / STALE bands and deduplicates/monitors entities for event intelligence
+- Reads Polymarket as an information source (no causation assumed) and scores public wallet trade history
+- Generates versioned strategy signals; signal deduplication includes the strategy version
+- Paper-trades with latency, impact, fees and gas; P&L is tracked from completed round trips
+- Walk-forward backtests on Kraken daily candles with buy-and-hold benchmark, random baseline, and rolling windows
 - Optional Grok research reports split into FACT / INFERENCE / UNCERTAINTY / SPECULATION
 - Official X recent-search on a hard **$5/week** budget (8 calls/day, 3 hours apart)
 - Extra free tapes: OKX/Binance funding, DefiLlama TVL, mempool fees, Reddit, extra RSS, DXY/SPX/gold, CoinCap
@@ -55,6 +55,7 @@ npm run dev
 - [Strategies](docs/STRATEGIES.md)
 - [Operations](docs/OPERATIONS.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Event + Wallet Intelligence](docs/EVENTS_WALLET_INTELLIGENCE.md)
 
 ## Honesty
 
