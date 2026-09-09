@@ -1,0 +1,17 @@
+# Optional self-host. The hosted Aether app already runs without Docker.
+# Live trading remains disabled unless every gate in docs/TRADING.md is met.
+
+services:
+  postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: aether
+      POSTGRES_USER: aether
+      POSTGRES_PASSWORD: aether
+    ports:
+      - "5432:5432"
+    volumes:
+      - aether_pg:/var/lib/postgresql/data
+
+volumes:
+  aether_pg:
