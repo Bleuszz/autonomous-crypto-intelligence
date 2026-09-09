@@ -1,7 +1,7 @@
-import { fetchJson } from "./http";
-import { clamp, num0 } from "./math";
-import { iso, nowIso } from "./time";
-import type { PolymarketDTO } from "./types";
+import { fetchJson } from "./http.ts";
+import { clamp, num0 } from "./math.ts";
+import { iso, nowIso } from "./time.ts";
+import type { PolymarketDTO } from "./types.ts";
 
 export type PolymarketTrade = {
   id: string;

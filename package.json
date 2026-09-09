@@ -16,7 +16,7 @@
     "preview:stop": "node scripts/preview.mjs stop",
     "typecheck": "tsc --noEmit",
     "check:auth": "node scripts/check-auth-invariant.mjs",
-    "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test src/lib/app-data/app-data.test.ts src/lib/app-data/readiness-schedule.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts src/lib/aether/scoring.test.ts src/lib/aether/paper.test.ts src/lib/aether/live.test.ts src/lib/aether/backtest.test.ts src/lib/aether/risk.test.ts src/lib/aether/xbudget.test.ts src/lib/aether/privacy.test.ts src/lib/aether/engine.test.ts src/lib/aether/digest.test.ts",
+    "test": "node --test 'scripts/**/*.test.mjs' && node --experimental-strip-types --test src/lib/app-data/app-data.test.ts src/lib/app-data/readiness-schedule.test.ts src/lib/auth/gate-identity.test.ts src/lib/auth/sign-in-gate.test.ts src/lib/aether/scoring.test.ts src/lib/aether/paper.test.ts src/lib/aether/live.test.ts src/lib/aether/backtest.test.ts src/lib/aether/risk.test.ts src/lib/aether/xbudget.test.ts src/lib/aether/privacy.test.ts src/lib/aether/engine.test.ts src/lib/aether/digest.test.ts src/lib/aether/events.test.ts src/lib/aether/wallet-intelligence.test.ts",
     "lint": "eslint .",
     "format": "prettier --write ."
   },

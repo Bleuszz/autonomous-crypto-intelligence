@@ -4,6 +4,7 @@ import {
   Beaker,
   BookOpen,
   Briefcase,
+  CalendarDays,
   Landmark,
   LayoutDashboard,
   Menu,
@@ -31,10 +32,12 @@ const NAV = [
   {
     label: "Context",
     items: [
+      { to: "/events", label: "Events", icon: CalendarDays },
       { to: "/news", label: "News", icon: Newspaper },
       { to: "/social", label: "Social", icon: BookOpen },
       { to: "/polymarket", label: "Polymarket", icon: Landmark },
       { to: "/wallets", label: "Wallets", icon: Wallet },
+      { to: "/copy-signals", label: "Copy signals", icon: Activity },
     ],
   },
   {

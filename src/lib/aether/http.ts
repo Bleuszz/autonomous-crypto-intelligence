@@ -1,4 +1,4 @@
-import { HTTP_TIMEOUT_MS, USER_AGENT } from "./config";
+import { HTTP_TIMEOUT_MS, USER_AGENT } from "./config.ts";
 
 export type FetchResult<T> = {
   ok: boolean;

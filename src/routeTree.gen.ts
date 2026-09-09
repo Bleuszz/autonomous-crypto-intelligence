@@ -11,6 +11,8 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as BacktestsRouteImport } from './routes/backtests'
+import { Route as CopySignalsRouteImport } from './routes/copy-signals'
+import { Route as EventsRouteImport } from './routes/events'
 import { Route as NewsRouteImport } from './routes/news'
 import { Route as OpportunitiesRouteImport } from './routes/opportunities'
 import { Route as PaperRouteImport } from './routes/paper'
@@ -30,6 +32,16 @@ const IndexRoute = IndexRouteImport.update({
 const BacktestsRoute = BacktestsRouteImport.update({
   id: '/backtests',
   path: '/backtests',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CopySignalsRoute = CopySignalsRouteImport.update({
+  id: '/copy-signals',
+  path: '/copy-signals',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const EventsRoute = EventsRouteImport.update({
+  id: '/events',
+  path: '/events',
   getParentRoute: () => rootRouteImport,
 } as any)
 const NewsRoute = NewsRouteImport.update({
@@ -86,6 +98,8 @@ const TokenAssetIdRoute = TokenAssetIdRouteImport.update({
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/backtests': typeof BacktestsRoute
+  '/copy-signals': typeof CopySignalsRoute
+  '/events': typeof EventsRoute
   '/news': typeof NewsRoute
   '/opportunities': typeof OpportunitiesRoute
   '/paper': typeof PaperRoute
@@ -100,6 +114,8 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/backtests': typeof BacktestsRoute
+  '/copy-signals': typeof CopySignalsRoute
+  '/events': typeof EventsRoute
   '/news': typeof NewsRoute
   '/opportunities': typeof OpportunitiesRoute
   '/paper': typeof PaperRoute
@@ -115,6 +131,8 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/backtests': typeof BacktestsRoute
+  '/copy-signals': typeof CopySignalsRoute
+  '/events': typeof EventsRoute
   '/news': typeof NewsRoute
   '/opportunities': typeof OpportunitiesRoute
   '/paper': typeof PaperRoute
@@ -131,6 +149,8 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/backtests'
+    | '/copy-signals'
+    | '/events'
     | '/news'
     | '/opportunities'
     | '/paper'
@@ -145,6 +165,8 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/backtests'
+    | '/copy-signals'
+    | '/events'
     | '/news'
     | '/opportunities'
     | '/paper'
@@ -159,6 +181,8 @@ export interface FileRouteTypes {
     | '__root__'
     | '/'
     | '/backtests'
+    | '/copy-signals'
+    | '/events'
     | '/news'
     | '/opportunities'
     | '/paper'
@@ -174,6 +198,8 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   BacktestsRoute: typeof BacktestsRoute
+  CopySignalsRoute: typeof CopySignalsRoute
+  EventsRoute: typeof EventsRoute
   NewsRoute: typeof NewsRoute
   OpportunitiesRoute: typeof OpportunitiesRoute
   PaperRoute: typeof PaperRoute
@@ -200,6 +226,20 @@ declare module '@tanstack/react-router' {
       path: '/backtests'
       fullPath: '/backtests'
       preLoaderRoute: typeof BacktestsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/copy-signals': {
+      id: '/copy-signals'
+      path: '/copy-signals'
+      fullPath: '/copy-signals'
+      preLoaderRoute: typeof CopySignalsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/events': {
+      id: '/events'
+      path: '/events'
+      fullPath: '/events'
+      preLoaderRoute: typeof EventsRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/news': {
@@ -278,6 +318,8 @@ declare module '@tanstack/react-router' {
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   BacktestsRoute: BacktestsRoute,
+  CopySignalsRoute: CopySignalsRoute,
+  EventsRoute: EventsRoute,
   NewsRoute: NewsRoute,
   OpportunitiesRoute: OpportunitiesRoute,
   PaperRoute: PaperRoute,

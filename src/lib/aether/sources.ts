@@ -1,10 +1,10 @@
-import { CHAIN_TO_GOPLUS, GT_NETWORKS, GT_TO_CHAIN, SOURCE_RELIABILITY } from "./config";
-import { X_MAX_RESULTS, X_SEARCH_QUERY } from "./xbudget";
-import { fetchJson, fetchText } from "./http";
-import { num, num0 } from "./math";
-import { iso, newsFreshness, nowIso } from "./time";
-import type { FreshnessBand } from "./types";
-import { parseGoPlus, type TokenSecurity } from "./risk";
+import { CHAIN_TO_GOPLUS, GT_NETWORKS, GT_TO_CHAIN, SOURCE_RELIABILITY } from "./config.ts";
+import { X_MAX_RESULTS, X_SEARCH_QUERY } from "./xbudget.ts";
+import { fetchJson, fetchText } from "./http.ts";
+import { num, num0 } from "./math.ts";
+import { iso, newsFreshness, nowIso } from "./time.ts";
+import type { FreshnessBand } from "./types.ts";
+import { parseGoPlus, type TokenSecurity } from "./risk.ts";
 
 export type HealthPing = {
   source: string;

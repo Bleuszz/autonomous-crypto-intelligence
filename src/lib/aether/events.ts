@@ -1,8 +1,8 @@
-import { SOURCE_RELIABILITY } from "./config";
-import { clamp } from "./math";
-import { extractEntities } from "./sources";
-import { nowIso } from "./time";
-import type { AssetRow, FreshnessBand, NewsDTO, PolymarketDTO } from "./types";
+import { SOURCE_RELIABILITY } from "./config.ts";
+import { clamp } from "./math.ts";
+import { extractEntities } from "./sources.ts";
+import { nowIso } from "./time.ts";
+import type { AssetRow, FreshnessBand, NewsDTO, PolymarketDTO } from "./types.ts";
 
 export type MonitoredEntity = {
   id: string;
@@ -97,7 +97,7 @@ export function classifyEvent(title: string): { eventType: string; category: str
   return { eventType: "statement", category: "general" };
 }
 
-function computeNovelty(title: string, existing: { title: string; publishedAt: string | null }[]): number {
+export function computeNovelty(title: string, existing: { title: string; publishedAt: string | null }[]): number {
   const normalized = normalizeText(title);
   if (!existing.length) return 1;
   let maxSim = 0;
