@@ -1,6 +1,8 @@
 import { createServerFn } from "@tanstack/react-start";
 import {
   ensureIngested,
+  getCopySignals,
+  getDetectedEvents,
   getNews,
   getOpportunities,
   getOverview,
@@ -48,6 +50,14 @@ export const fetchPolymarketFeed = createServerFn({ method: "GET" }).handler(asy
 
 export const fetchWallets = createServerFn({ method: "GET" }).handler(async () => {
   return getWallets();
+});
+
+export const fetchDetectedEvents = createServerFn({ method: "GET" }).handler(async () => {
+  return getDetectedEvents();
+});
+
+export const fetchCopySignals = createServerFn({ method: "GET" }).handler(async () => {
+  return getCopySignals();
 });
 
 export const fetchPaper = createServerFn({ method: "GET" }).handler(async () => {

@@ -43,6 +43,8 @@ function overview(): OverviewDTO {
       feesPaidUsd: 3,
       slippagePaidUsd: 1,
       nTrades: 1,
+      nWins: 0,
+      nLosses: 0,
       winRate: null,
     },
     regime: {
@@ -58,6 +60,8 @@ function overview(): OverviewDTO {
     news: [],
     social: [],
     polymarket: [],
+    detectedEvents: [],
+    copySignals: [],
     sources: [{ source: "coingecko", status: "up", latencyMs: 200, lastSuccessAt: null, lastError: null }],
     lastIngestAt: "2026-09-09T21:00:00.000Z",
     ingestStatus: "ok",

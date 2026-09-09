@@ -223,6 +223,8 @@ export type PortfolioDTO = {
   feesPaidUsd: number;
   slippagePaidUsd: number;
   nTrades: number;
+  nWins: number;
+  nLosses: number;
   winRate: number | null;
 };
 
@@ -243,6 +245,13 @@ export type BacktestMetrics = {
   bestTradePct: number;
   worstTradePct: number;
   consecutiveLosses: number;
+  avgWinPct: number;
+  avgLossPct: number;
+  payoffRatio: number;
+  expectancy: number;
+  calmar: number | null;
+  benchmarkReturnPct: number | null;
+  benchmarkOutperformancePct: number | null;
   capacityNote: string;
 };
 
@@ -329,6 +338,8 @@ export type OverviewDTO = {
   news: NewsDTO[];
   social: SocialDTO[];
   polymarket: PolymarketDTO[];
+  detectedEvents: DetectedEventDTO[];
+  copySignals: CopySignalDTO[];
   sources: SourceHealth[];
   lastIngestAt: string | null;
   ingestStatus: string;
@@ -341,6 +352,42 @@ export type OverviewDTO = {
   xUsage: XUsageDTO;
   lastDigestAt?: string | null;
   nextDigestSlot?: string | null;
+};
+
+export type DetectedEventDTO = {
+  id: string;
+  source: string;
+  author: string | null;
+  entityId: string | null;
+  title: string;
+  url: string | null;
+  eventType: string;
+  category: string;
+  affectedAssets: string[];
+  sentiment: number | null;
+  novelty: number;
+  credibility: number;
+  marketRelevance: number;
+  impactScore: number;
+  confidence: number;
+  historicalContext: string;
+  publishedAt: string | null;
+  observedAt: string;
+};
+
+export type CopySignalDTO = {
+  id: string;
+  walletId: string;
+  address: string;
+  marketId: string | null;
+  assetId: string | null;
+  side: "buy" | "sell";
+  walletQualityScore: number;
+  copyConfidence: number;
+  sourceTradeTimestamp: string;
+  latencySeconds: number;
+  expectedValue: number;
+  reasons: string[];
 };
 
 export type SystemDTO = {

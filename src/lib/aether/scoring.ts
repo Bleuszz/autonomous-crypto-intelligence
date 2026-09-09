@@ -9,6 +9,7 @@ export type FeatureInput = {
   smartMoney: number;
   social: number;
   news: number;
+  sourceReliability?: number;
   washHint?: boolean;
 };
 
@@ -38,8 +39,10 @@ export function momentumScore(asset: AssetRow): number {
   const accel = h1 - d1 / 24;
   const core = 0.45 * tanh01(h1 / 6) + 0.35 * tanh01(d1 / 18) + 0.2 * tanh01(accel / 4);
   const overheat = d1 > 80 ? 0.25 : d1 > 40 ? 0.1 : 0;
+  // If the 7d trend is strongly down, a 24h bounce is more likely mean-reversion than momentum.
+  const extendedDump = d7 < -30 && d1 < 0 ? 0.12 : 0;
   const wreck = d1 < -35 ? 0.2 : 0;
-  return clamp(core - overheat - wreck, 0, 1);
+  return clamp(core - overheat - extendedDump - wreck, 0, 1);
 }
 
 export function volumeAnomalyScore(asset: AssetRow): number {
@@ -70,11 +73,13 @@ export function executionPenalty(asset: AssetRow): number {
 
 export function scoreOpportunity(input: FeatureInput, weights = SCORE_WEIGHTS): RankedOpportunity {
   const { asset } = input;
+  const reliabilityDiscount = 1 - 0.5 * (1 - clamp(input.sourceReliability ?? 1, 0, 1));
+
   const components: ScoreComponents = {
-    marketQuality: marketQuality(asset),
-    liquidity: liquidityScore(asset),
-    momentum: momentumScore(asset),
-    volumeAnomaly: volumeAnomalyScore(asset),
+    marketQuality: marketQuality(asset) * reliabilityDiscount,
+    liquidity: liquidityScore(asset) * reliabilityDiscount,
+    momentum: momentumScore(asset) * reliabilityDiscount,
+    volumeAnomaly: volumeAnomalyScore(asset) * reliabilityDiscount,
     smartMoney: clamp(input.smartMoney, 0, 1),
     social: clamp(input.social, 0, 1),
     news: clamp(input.news, 0, 1),

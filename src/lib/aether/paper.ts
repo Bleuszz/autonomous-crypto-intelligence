@@ -18,10 +18,14 @@ export type SimulatedFill = {
   rejectReason: string | null;
   qty: number;
   price: number;
+  /** Requested gross notional (target position size for buys, sale notional for sells). */
+  requestedNotionalUsd: number;
+  /** Actual notional filled (qty * fill price). For buys this is the gross position acquired. */
   notionalUsd: number;
   feeUsd: number;
   gasUsd: number;
   slippageBps: number;
+  impactBps: number;
   latencyMs: number;
   midAtSignal: number;
   midAtFill: number;
@@ -31,12 +35,19 @@ export type SimulatedFill = {
 /**
  * Do not assume we can trade at the observed/signal mid.
  * Apply latency drift, size vs liquidity impact, fees and gas.
+ *
+ * Semantics:
+ * - For a buy, notionalUsd is the target gross position size we want to acquire.
+ *   The cash required = notionalUsd + fee + gas. Quantity = notionalUsd / fill price.
+ * - For a sell, notionalUsd is the gross notional we wish to sell.
+ *   Quantity = notionalUsd / fill price. Proceeds = qty * fill price - fee - gas.
  */
 export function simulateFill(input: FillModelInput): SimulatedFill {
   const feeBps = input.feeBps ?? PAPER_FEES.dexFeeBps;
   const gasUsd = input.gasUsd ?? 0;
   const mid = input.mid;
-  const model = "latency+impact+fee.v1";
+  const model = "latency+impact+fee.v2";
+  const requestedNotionalUsd = input.notionalUsd;
 
   if (!(mid > 0) || !(input.notionalUsd > 0)) {
     return {
@@ -44,10 +55,12 @@ export function simulateFill(input: FillModelInput): SimulatedFill {
       rejectReason: "Invalid price or size",
       qty: 0,
       price: 0,
+      requestedNotionalUsd,
       notionalUsd: 0,
       feeUsd: 0,
       gasUsd: 0,
       slippageBps: 0,
+      impactBps: 0,
       latencyMs: input.latencyMs,
       midAtSignal: mid,
       midAtFill: mid,
@@ -60,10 +73,12 @@ export function simulateFill(input: FillModelInput): SimulatedFill {
       rejectReason: "Liquidity below executable threshold",
       qty: 0,
       price: 0,
+      requestedNotionalUsd,
       notionalUsd: 0,
       feeUsd: 0,
       gasUsd: 0,
       slippageBps: 0,
+      impactBps: 0,
       latencyMs: input.latencyMs,
       midAtSignal: mid,
       midAtFill: mid,
@@ -89,11 +104,13 @@ export function simulateFill(input: FillModelInput): SimulatedFill {
       ok: false,
       rejectReason: "Non-positive modelled fill price",
       qty: 0,
-      price: 0,
+      price,
+      requestedNotionalUsd,
       notionalUsd: 0,
       feeUsd: 0,
       gasUsd: 0,
       slippageBps: impactBps,
+      impactBps,
       latencyMs: input.latencyMs,
       midAtSignal: mid,
       midAtFill,
@@ -101,35 +118,43 @@ export function simulateFill(input: FillModelInput): SimulatedFill {
     };
   }
 
-  const feeUsd = input.notionalUsd * (feeBps / 10_000);
-  const spend = input.side === "buy" ? input.notionalUsd - feeUsd - gasUsd : input.notionalUsd;
-  if (spend <= 0) {
-    return {
-      ok: false,
-      rejectReason: "Fees consume the entire order",
-      qty: 0,
-      price,
-      notionalUsd: 0,
-      feeUsd,
-      gasUsd,
-      slippageBps: impactBps,
-      latencyMs: input.latencyMs,
-      midAtSignal: mid,
-      midAtFill,
-      model,
-    };
+  const qty = input.notionalUsd / price;
+  const grossNotional = qty * price;
+  const feeUsd = grossNotional * (feeBps / 10_000);
+
+  if (input.side === "buy") {
+    const cost = grossNotional + feeUsd + gasUsd;
+    if (cost <= 0) {
+      return {
+        ok: false,
+        rejectReason: "Fees consume the entire order",
+        qty,
+        price,
+        requestedNotionalUsd,
+        notionalUsd: round(grossNotional, 6),
+        feeUsd,
+        gasUsd,
+        slippageBps: round(impactBps, 2),
+        impactBps,
+        latencyMs: input.latencyMs,
+        midAtSignal: mid,
+        midAtFill,
+        model,
+      };
+    }
   }
 
-  const qty = input.side === "buy" ? spend / price : input.notionalUsd / price;
   return {
     ok: true,
     rejectReason: null,
     qty: round(qty, 10),
     price: round(price, 10),
-    notionalUsd: round(qty * price, 6),
+    requestedNotionalUsd,
+    notionalUsd: round(grossNotional, 6),
     feeUsd: round(feeUsd, 6),
     gasUsd: round(gasUsd, 6),
     slippageBps: round(impactBps, 2),
+    impactBps,
     latencyMs: input.latencyMs,
     midAtSignal: mid,
     midAtFill: round(midAtFill, 10),

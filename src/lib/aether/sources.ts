@@ -2,7 +2,7 @@ import { CHAIN_TO_GOPLUS, GT_NETWORKS, GT_TO_CHAIN, SOURCE_RELIABILITY } from ".
 import { X_MAX_RESULTS, X_SEARCH_QUERY } from "./xbudget";
 import { fetchJson, fetchText } from "./http";
 import { num, num0 } from "./math";
-import { iso, newsFreshness, nowIso, parseTime } from "./time";
+import { iso, newsFreshness, nowIso } from "./time";
 import type { FreshnessBand } from "./types";
 import { parseGoPlus, type TokenSecurity } from "./risk";
 

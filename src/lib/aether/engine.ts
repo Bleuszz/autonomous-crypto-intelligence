@@ -87,7 +87,7 @@ export function isFreshMark(r: RankedOpportunity, now = Date.now()): boolean {
   const age =
     r.asset.dataAgeMs ??
     (r.asset.observedAt ? now - Date.parse(r.asset.observedAt) : null);
-  if (age == null || !Number.isFinite(age)) return true; // just ingested, timestamp missing
+  if (age == null || !Number.isFinite(age)) return false; // unknown age is not fresh
   return age <= PRICE_TRADE_STALE_MS;
 }
 

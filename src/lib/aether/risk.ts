@@ -171,6 +171,7 @@ export function checkOrderRisk(opts: {
   chainNotionalAfter: number;
   liquidityUsd: number;
   slippageBps: number;
+  startingEquity?: number;
   limits: {
     maxPositionPct: number;
     maxDailyLossPct: number;
@@ -186,7 +187,8 @@ export function checkOrderRisk(opts: {
   if (opts.requestedNotional > opts.equity * opts.limits.maxPositionPct + 1e-6) {
     reasons.push(`Exceeds max position size (${opts.limits.maxPositionPct * 100}% of equity)`);
   }
-  if (opts.dayPnlUsd < -opts.equity * opts.limits.maxDailyLossPct) {
+  const dailyAnchor = opts.startingEquity && opts.startingEquity > 0 ? opts.startingEquity : opts.equity;
+  if (opts.dayPnlUsd < -dailyAnchor * opts.limits.maxDailyLossPct) {
     reasons.push("Daily loss circuit breaker");
   }
   if (opts.tokenNotionalAfter > opts.equity * opts.limits.maxTokenConcentrationPct + 1e-6) {

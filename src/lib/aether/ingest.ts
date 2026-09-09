@@ -43,6 +43,8 @@ import { num0 } from "./math";
 import type {
   AssetRow,
   BacktestDTO,
+  CopySignalDTO,
+  DetectedEventDTO,
   NewsDTO,
   OverviewDTO,
   PolymarketDTO,
@@ -57,7 +59,15 @@ import type {
   WalletTxDTO,
   XUsageDTO,
 } from "./types";
-import { runMomentumBacktest, walkForwardSplit, type Candle } from "./backtest";
+import { DEFAULT_MOMENTUM, runBuyHoldBenchmark, runMomentumBacktest, walkForwardSplit, type Candle } from "./backtest";
+import { detectEvents } from "./events";
+import {
+  evaluateWalletPerformance,
+  fetchPolymarketGlobalTrades,
+  generateCopySignals,
+  type PolymarketTrade,
+  type WalletPerformanceV2,
+} from "./wallet-intelligence";
 import { runResearch } from "./research";
 import { loadRuntimeSecrets } from "./secrets";
 import { startDeskScheduler } from "./scheduler";
@@ -184,6 +194,17 @@ const STOP_WORDS = new Set([
 
 function rid(): string {
   return crypto.randomUUID();
+}
+
+function sourceReliabilityFor(source: string, healthMap: Map<string, HealthPing>): number {
+  const h = healthMap.get(source);
+  if (!h) return 0.7;
+  if (h.status === "down") return 0.2;
+  if (h.status === "degraded") return 0.6;
+  const base = 0.85;
+  // Latency penalty: >10s starts to degrade.
+  if (h.latencyMs && h.latencyMs > 10_000) return base - Math.min(0.3, (h.latencyMs - 10_000) / 60_000);
+  return base;
 }
 
 async function recordHealth(sql: Sql, list: HealthPing[]) {
@@ -458,6 +479,7 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
       chainNotionalAfter: chainNotional + size,
       liquidityUsd: executableUsd(r),
       slippageBps: slipBps,
+      startingEquity: num0(p?.starting_equity_usd) || equity,
       limits: RISK_LIMITS,
     });
     const latency = pickLatencyMs(intent.strategyId + intent.assetId);
@@ -489,7 +511,14 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
       continue;
     }
     const cost = fill.notionalUsd + fill.feeUsd + fill.gasUsd;
-    if (cost > cash) continue;
+    if (cost > cash) {
+      await sql.query(
+        `insert into paper_orders (id, portfolio_id, asset_id, side, type, status, requested_notional_usd, submitted_at, available_at, reason, latency_ms, assumed_mid)
+         values ($1,$2,$3,'buy','market','rejected',$4,now(),now(),$5,$6,$7)`,
+        [oid, DEFAULT_PORTFOLIO_ID, intent.assetId, size, "Insufficient cash after fill costs", latency, r.asset.priceUsd],
+      );
+      continue;
+    }
     cash -= cost;
     await sql.query(
       `insert into paper_orders (id, portfolio_id, asset_id, side, type, status, requested_notional_usd, submitted_at, available_at, reason, latency_ms, assumed_mid)
@@ -602,13 +631,48 @@ async function assemblePortfolio(sql: Sql, ranked: RankedOpportunity[]): Promise
   const equity = cash + positions.reduce((a, x) => a + x.notionalUsd, 0);
   const start = num0(p?.starting_equity_usd) || 10_000;
   const dayPnl = num0(p?.day_pnl_usd);
-  const sellFills = fills.filter((f) => f.side === "sell");
-  const wins = sellFills.filter((f) => {
-    const pos = positions.find((x) => x.assetId === String(f.asset_id));
-    return num0(f.price) > (pos?.avgPrice ?? num0(f.price));
-  });
-  const closedSells = fills.filter((f) => String(f.side) === "sell");
-  const winRate = closedSells.length ? wins.length / Math.max(closedSells.length, 1) : null;
+
+  // Round-trip realized P&L and win rate from fills, not from currently open positions.
+  const buyFillsByAsset = new Map<string, { qty: number; cost: number }[]>();
+  for (const f of fills) {
+    if (f.side !== "buy") continue;
+    const assetId = String(f.asset_id);
+    const arr = buyFillsByAsset.get(assetId) ?? [];
+    const qty = num0(f.qty);
+    // cash cost of the buy fill = gross notional + fee + gas
+    arr.push({ qty, cost: num0(f.notional_usd) + num0(f.fee_usd) + num0(f.gas_usd) });
+    buyFillsByAsset.set(assetId, arr);
+  }
+  let roundTrips = 0;
+  let roundTripWins = 0;
+  let roundTripLosses = 0;
+  const realizedFromFills: number[] = [];
+  for (const sell of fills.filter((f) => f.side === "sell")) {
+    const assetId = String(sell.asset_id);
+    const sells = { qty: num0(sell.qty), proceeds: num0(sell.notional_usd) - num0(sell.fee_usd) - num0(sell.gas_usd) };
+    const buys = buyFillsByAsset.get(assetId) ?? [];
+    let remaining = sells.qty;
+    let matchedCost = 0;
+    while (remaining > 1e-12 && buys.length) {
+      const b = buys[0]!;
+      const takeQty = Math.min(remaining, b.qty);
+      matchedCost += (takeQty / b.qty) * b.cost;
+      b.qty -= takeQty;
+      remaining -= takeQty;
+      if (b.qty <= 1e-12) buys.shift();
+    }
+    if (sells.qty > 0) {
+      const pnl = sells.proceeds - matchedCost;
+      realizedFromFills.push(pnl);
+      roundTrips++;
+      if (pnl > 0) roundTripWins++;
+      else roundTripLosses++;
+    }
+  }
+  const realizedPnl = realizedFromFills.reduce((a, x) => a + x, 0);
+  // Prefer realized computed from round trips; if it disagrees with the stored portfolio realized, log is secondary.
+  const winRate = roundTrips > 0 ? roundTripWins / roundTrips : null;
+
   return {
     id: DEFAULT_PORTFOLIO_ID,
     name: String(p?.name ?? "Default paper desk"),
@@ -616,7 +680,7 @@ async function assemblePortfolio(sql: Sql, ranked: RankedOpportunity[]): Promise
     startingEquityUsd: start,
     cashUsd: cash,
     equityUsd: equity,
-    realizedPnlUsd: num0(p?.realized_pnl_usd),
+    realizedPnlUsd: realizedPnl,
     unrealizedPnlUsd: unreal,
     dayPnlUsd: dayPnl,
     dayPnlPct: start ? (dayPnl / start) * 100 : 0,
@@ -653,6 +717,8 @@ async function assemblePortfolio(sql: Sql, ranked: RankedOpportunity[]): Promise
     feesPaidUsd,
     slippagePaidUsd,
     nTrades: fills.length,
+    nWins: roundTripWins,
+    nLosses: roundTripLosses,
     winRate,
   };
 }
@@ -695,6 +761,7 @@ async function ingestOnce(): Promise<void> {
       ...extras.health,
     ].map((h) => ({ ...h, error: sanitizePublicError(h.error) }));
     await recordHealth(sql, health);
+    const healthMap = new Map(health.map((h) => [h.source, h]));
 
     const merged = new Map<string, NormalizedAsset>();
     for (const a of [...cg.assets, ...ds.assets, ...pools.assets]) {
@@ -977,6 +1044,7 @@ async function ingestOnce(): Promise<void> {
         smartMoney: Math.min(1, (walletHits.get(a.id) ?? 0) * 0.18),
         social: Math.max(trendingSymbols.has(a.symbol) ? 0.55 : 0, socialBoost.get(a.symbol) ?? 0),
         news: newsBoost.get(a.symbol) ?? 0,
+        sourceReliability: sourceReliabilityFor(a.source ?? "unknown", healthMap),
       }, SCORE_WEIGHTS);
       ranked.push(scored);
       await sql.query(
@@ -1000,8 +1068,8 @@ async function ingestOnce(): Promise<void> {
     let signalsCreated = 0;
     for (const s of gen) {
       const exists = await sql.query<{ id: string }>(
-        `select id from signals where strategy_id=$1 and asset_id=$2 and status='open' and created_at > now() - interval '6 hours' limit 1`,
-        [s.strategyId, s.assetId],
+        `select id from signals where strategy_id=$1 and strategy_version=$2 and asset_id=$3 and status='open' and created_at > now() - interval '6 hours' limit 1`,
+        [s.strategyId, s.strategyVersion, s.assetId],
       );
       if (exists[0]) continue;
       await sql.query(
@@ -1032,6 +1100,101 @@ async function ingestOnce(): Promise<void> {
       createdAt: String(r.created_at),
       explanation: parseJsonArray(r.explanation),
     }));
+
+    // ---- Event intelligence + Polymarket wallet intelligence ----
+    const assetsForEvents = [...merged.values()].map((x) => rowAsset({ ...x, chain_id: x.chainId, contract_address: x.contractAddress, coingecko_id: x.coingeckoId, image_url: x.imageUrl, price_usd: x.priceUsd, market_cap_usd: x.marketCapUsd, fdv_usd: x.fdvUsd, volume_24h_usd: x.volume24hUsd, liquidity_usd: x.liquidityUsd, change_1h_pct: x.change1hPct, change_24h_pct: x.change24hPct, change_7d_pct: x.change7dPct, pair_created_at: x.pairCreatedAt, sparkline_7d: x.sparkline7d, source_reliability: x.sourceReliability, observed_at: x.observedAt }));
+    const socialForEvents = socialDto.map((s) => ({ platform: s.platform, author: s.author, body: s.body }));
+    const detectedEvents = detectEvents({ news: newsDto, social: socialForEvents, polymarket: pmDto, assets: assetsForEvents });
+    const detectedEventDtos: DetectedEventDTO[] = detectedEvents.map((e) => ({
+      id: e.id,
+      source: e.source,
+      author: e.author,
+      entityId: e.entityId,
+      title: e.title,
+      url: e.url,
+      eventType: e.eventType,
+      category: e.category,
+      affectedAssets: e.affectedAssets,
+      sentiment: e.sentiment,
+      novelty: e.novelty,
+      credibility: e.credibility,
+      marketRelevance: e.marketRelevance,
+      impactScore: e.impactScore,
+      confidence: e.confidence,
+      historicalContext: e.historicalContext,
+      publishedAt: e.publishedAt,
+      observedAt: e.observedAt,
+    }));
+    for (const e of detectedEvents.slice(0, 20)) {
+      await sql.query(
+        `insert into detected_events (id, source, source_reliability, author, entity_id, title, url, raw_text, event_type, category, affected_assets, sentiment, novelty, credibility, market_relevance, impact_score, confidence, historical_context, supporting_sources, contradictory_sources, published_at, observed_at, ingested_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20::jsonb,$21,$22,now())
+         on conflict (id) do update set
+           impact_score = excluded.impact_score,
+           confidence = excluded.confidence,
+           market_relevance = excluded.market_relevance,
+           updated_at = now()`,
+        [e.id, e.source, e.sourceReliability, e.author, e.entityId, e.title, e.url, e.rawText, e.eventType, e.category, JSON.stringify(e.affectedAssets), e.sentiment, e.novelty, e.credibility, e.marketRelevance, e.impactScore, e.confidence, e.historicalContext, JSON.stringify(e.supportingSources), JSON.stringify(e.contradictorySources), e.publishedAt, e.observedAt],
+      );
+    }
+
+    const { trades: pmTrades, health: pmDataHealth } = await fetchPolymarketGlobalTrades(250);
+    if (pmDataHealth.status !== "down") health.push(pmDataHealth);
+    const walletPerfMap = new Map<string, WalletPerformanceV2>();
+    const walletTradesByWallet = new Map<string, PolymarketTrade[]>();
+    for (const t of pmTrades) {
+      const arr = walletTradesByWallet.get(t.walletId) ?? [];
+      arr.push(t);
+      walletTradesByWallet.set(t.walletId, arr);
+    }
+    const conditionIds = new Set(pmTrades.map((t) => t.conditionId).filter(Boolean));
+    const marketPrices = new Map<string, number>();
+    for (const m of pm.markets) {
+      if (m.id && conditionIds.has(m.id.toLowerCase())) {
+        marketPrices.set(m.id.toLowerCase(), num0(m.probability));
+      }
+    }
+    for (const [walletId, trades] of walletTradesByWallet.entries()) {
+      if (trades.length < 3) continue; // need some history
+      const perf = evaluateWalletPerformance(trades, marketPrices);
+      walletPerfMap.set(walletId, perf);
+      await sql.query(
+        `insert into polymarket_wallet_trades (id, wallet_id, chain_id, address, tx_hash, market_id, condition_id, event_slug, market_title, outcome, side, size, price, notional_usd, timestamp, observed_at, source)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+         on conflict (id) do nothing`,
+        trades.map((t) => [t.id, walletId, t.chainId, t.address, t.txHash, t.marketId, t.conditionId, t.eventSlug, t.marketTitle, t.outcome, t.side, t.size, t.price, t.notionalUsd, t.timestamp, t.observedAt, t.source]),
+      );
+      await sql.query(
+        `insert into wallet_performance_v2 (wallet_id, address, chain_id, n_trades, n_wins, n_losses, win_rate, avg_return_pct, median_return_pct, avg_win_pct, avg_loss_pct, payoff_ratio, profit_factor, realized_pnl_usd, max_drawdown_pct, avg_holding_hours, recent_n_trades, recent_return_pct, category_performance, quality_score, score_reasons, first_seen, last_seen, updated_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20,$21::jsonb,$22,$23,now())
+         on conflict (wallet_id) do update set
+           n_trades = excluded.n_trades, n_wins = excluded.n_wins, n_losses = excluded.n_losses, win_rate = excluded.win_rate,
+           avg_return_pct = excluded.avg_return_pct, median_return_pct = excluded.median_return_pct, avg_win_pct = excluded.avg_win_pct, avg_loss_pct = excluded.avg_loss_pct,
+           payoff_ratio = excluded.payoff_ratio, profit_factor = excluded.profit_factor, realized_pnl_usd = excluded.realized_pnl_usd, max_drawdown_pct = excluded.max_drawdown_pct,
+           avg_holding_hours = excluded.avg_holding_hours, recent_n_trades = excluded.recent_n_trades, recent_return_pct = excluded.recent_return_pct,
+           category_performance = excluded.category_performance, quality_score = excluded.quality_score, score_reasons = excluded.score_reasons, first_seen = excluded.first_seen, last_seen = excluded.last_seen, updated_at = now()`,
+        [perf.walletId, perf.address, perf.chainId, perf.nTrades, perf.nWins, perf.nLosses, perf.winRate, perf.avgReturnPct, perf.medianReturnPct, perf.avgWinPct, perf.avgLossPct, perf.payoffRatio, perf.profitFactor, perf.realizedPnlUsd, perf.maxDrawdownPct, perf.avgHoldingHours, perf.recentNTrades, perf.recentReturnPct, JSON.stringify(perf.categoryPerformance), perf.qualityScore, JSON.stringify(perf.scoreReasons), perf.firstSeen, perf.lastSeen],
+      );
+    }
+
+    const assetMap = new Map<string, string>();
+    for (const a of assetsForEvents) {
+      if (a.coingeckoId) assetMap.set(a.coingeckoId, a.id);
+    }
+    const copySignals = generateCopySignals({ trades: pmTrades, wallets: walletPerfMap, markets: pmDto, assetMap });
+    const copySignalDtos: CopySignalDTO[] = copySignals.slice(0, 20).map((s) => ({
+      id: s.id, walletId: s.walletId, address: s.address, marketId: s.marketId, assetId: s.assetId, side: s.side,
+      walletQualityScore: s.walletQualityScore, copyConfidence: s.copyConfidence, sourceTradeTimestamp: s.sourceTradeTimestamp,
+      latencySeconds: s.latencySeconds, expectedValue: s.expectedValue, reasons: s.reasons,
+    }));
+    for (const s of copySignals.slice(0, 20)) {
+      await sql.query(
+        `insert into copy_signals (id, wallet_id, market_id, asset_id, side, wallet_quality_score, copy_confidence, source_trade_id, source_trade_timestamp, observed_at, latency_seconds, expected_value, status, reasons, created_at)
+         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13::jsonb,now())
+         on conflict (id) do update set copy_confidence = excluded.copy_confidence, expected_value = excluded.expected_value, updated_at = now()`,
+        [s.id, s.walletId, s.marketId, s.assetId, s.side, s.walletQualityScore, s.copyConfidence, s.sourceTradeId, s.sourceTradeTimestamp, s.observedAt, s.latencySeconds, s.expectedValue, JSON.stringify(s.reasons)],
+      );
+    }
 
     const btcA = ranked.find((r) => r.asset.id === "cg:bitcoin");
     const ethA = ranked.find((r) => r.asset.id === "cg:ethereum");
@@ -1087,6 +1250,8 @@ async function ingestOnce(): Promise<void> {
       news: newsDto.slice(0, 40),
       social: socialDto.slice(0, 40),
       polymarket: pmDto.slice(0, 40),
+      detectedEvents: detectedEventDtos,
+      copySignals: copySignalDtos,
       sources: sources.map((s) => ({
         source: String(s.source),
         status: (s.status as SourceHealth["status"]) ?? "down",
@@ -1101,7 +1266,7 @@ async function ingestOnce(): Promise<void> {
       xUsage: xUsageDto(xPosts.budget),
     };
     cache.lastIngestAt = Date.now();
-    await maybeStoreDigest(sql, cache.overview);
+    if (cache.overview) await maybeStoreDigest(sql, cache.overview);
     await sql.query(
       `update ingest_runs set finished_at=now(), status='ok', assets_upserted=$2, signals_created=$3, errors=$4::jsonb, duration_ms=$5 where id=$1`,
       [runId, merged.size, signalsCreated, JSON.stringify(errors.map((e) => sanitizePublicError(e) ?? e)), Date.now() - t0],
@@ -1180,6 +1345,12 @@ export async function getSocial(): Promise<{ posts: SocialDTO[]; xConfigured: bo
 }
 export async function getPolymarket(): Promise<PolymarketDTO[]> {
   return (await ensureIngested(false)).polymarket;
+}
+export async function getDetectedEvents(): Promise<DetectedEventDTO[]> {
+  return (await ensureIngested(false)).detectedEvents;
+}
+export async function getCopySignals(): Promise<CopySignalDTO[]> {
+  return (await ensureIngested(false)).copySignals;
 }
 export async function getWallets(): Promise<{ wallets: WalletDTO[]; txs: WalletTxDTO[] }> {
   await ensureIngested(false);
@@ -1328,9 +1499,10 @@ export async function runBacktestJob(pair: "XBTUSD" | "ETHUSD" = "XBTUSD"): Prom
   await recordHealth(sql, [health]);
   const mapped: Candle[] = candles.map((c) => ({ t: c.t, open: c.open, high: c.high, low: c.low, close: c.close, volume: c.volume }));
   const { inSample, outOfSample } = walkForwardSplit(mapped, 0.7);
-  const isRes = runMomentumBacktest(inSample);
-  const oos = runMomentumBacktest(outOfSample);
-  const full = runMomentumBacktest(mapped);
+  const benchmark = { buyHoldReturnPct: runBuyHoldBenchmark(mapped) };
+  const isRes = runMomentumBacktest(inSample, DEFAULT_MOMENTUM, 10_000, benchmark);
+  const oos = runMomentumBacktest(outOfSample, DEFAULT_MOMENTUM, 10_000, benchmark);
+  const full = runMomentumBacktest(mapped, DEFAULT_MOMENTUM, 10_000, benchmark);
   const id = rid();
   const dto: BacktestDTO = {
     id, strategyId: "momentum_v1", strategyVersion: "1.0.0", assetId, venue: "kraken", timeframe: "1d",
