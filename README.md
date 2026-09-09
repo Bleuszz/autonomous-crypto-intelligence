@@ -18,6 +18,8 @@ Private repo: [github.com/Bleuszz/autonomous-crypto-intelligence](https://github
 - Walk-forward backtests on Kraken daily candles (no look-ahead)
 - Optional Grok research reports split into FACT / INFERENCE / UNCERTAINTY / SPECULATION
 - Official X recent-search on a hard **$5/week** budget (8 calls/day, 3 hours apart)
+- Extra free tapes: OKX/Binance funding, DefiLlama TVL, mempool fees, Reddit, extra RSS, DXY/SPX/gold, CoinCap
+- Private 08:00 / 20:00 Europe/London desk notes (recipient never shown on this public site)
 
 X API keys live in gitignored `secrets/runtime.env`. The spend ledger is `secrets/x-budget.json` so a restart cannot reset the cap.
 

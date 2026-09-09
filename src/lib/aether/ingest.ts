@@ -3,17 +3,17 @@ import {
   DEFAULT_PORTFOLIO_ID,
   INGEST_POLL_MS,
   INGEST_TTL_MS,
+  PAPER_ENGINE,
   PAPER_FEES,
   PRICE_TRADE_STALE_MS,
   RISK_LIMITS,
   SCORE_WEIGHTS,
-  envFlag,
   envStr,
 } from "./config";
 import { assessRug, checkOrderRisk } from "./risk";
 import { scoreOpportunity, compareOpportunities } from "./scoring";
 import { generateSignals } from "./signals";
-import { gasForChain, pickLatencyMs, positionSizeUsd, simulateFill } from "./paper";
+import { gasForChain, pickLatencyMs, simulateFill } from "./paper";
 import { evaluateLiveGates } from "./live";
 import {
   extractEntities,
@@ -34,6 +34,10 @@ import {
   type NormalizedAsset,
   type NormalizedSocial,
 } from "./sources";
+import { fetchDeskExtras } from "./feeds";
+import { decideEntries, decideExits, executableUsd, sizeUsd, type OpenPosition, type RegimeInput, type TradeIntent } from "./engine";
+import { buildDigest, digestKey, loadLatestDigestMeta, londonSlot, rememberDigest, wasDigestSent } from "./digest";
+import { sanitizePublicError } from "./privacy";
 import { ageMs, formatAge, newsFreshness, nowIso } from "./time";
 import { num0 } from "./math";
 import type {
@@ -94,7 +98,7 @@ function xUsageDto(budget: XBudgetState): XUsageDTO {
     lastCallAt: budget.lastCallAt ? new Date(budget.lastCallAt).toISOString() : null,
     lastSuccessAt: budget.lastSuccessAt ? new Date(budget.lastSuccessAt).toISOString() : null,
     nextCallAt: next ? new Date(next).toISOString() : null,
-    lastError: budget.lastError,
+    lastError: sanitizePublicError(budget.lastError),
     tweetsPulledWeek: budget.tweetsPulled,
   };
 }
@@ -173,18 +177,6 @@ async function maybeFetchX(sql: Sql): Promise<{
   return { posts: x.posts, health: x.health, budget };
 }
 
-function isQualityPaperEntry(r: RankedOpportunity, s: SignalDTO): boolean {
-  if (s.strategyId === "social_proxy_v1") return false;
-  if (s.confidence < 0.64) return false;
-  if ((r.asset.dataAgeMs ?? Number.POSITIVE_INFINITY) > PRICE_TRADE_STALE_MS) return false;
-  if (!(r.asset.priceUsd && r.asset.priceUsd > 0)) return false;
-  if (r.rugRisk >= 0.45) return false;
-  if (Math.abs(r.asset.change24hPct ?? 0) > 80) return false;
-  const liq = r.asset.liquidityUsd ?? 0;
-  if (r.asset.kind === "dex") return liq >= 250_000;
-  return liq >= 400_000;
-}
-
 const STOP_WORDS = new Set([
   "THE", "AND", "FOR", "ARE", "YOU", "NEW", "ALL", "BUT", "NOT", "ANY", "CAN", "OUR", "OUT",
   "NOW", "TOP", "LOW", "GAS", "FEE", "PER", "DAY", "USD", "NFT", "DAO", "CEO", "ETF",
@@ -215,7 +207,7 @@ async function recordHealth(sql: Sql, list: HealthPing[]) {
         h.latencyMs,
         h.status === "down" ? null : nowIso(),
         h.status === "down" ? nowIso() : null,
-        h.error,
+        sanitizePublicError(h.error),
         h.status === "down" ? 1 : 0,
       ],
     );
@@ -308,31 +300,60 @@ function rowAsset(r: Record<string, unknown>): AssetRow {
   };
 }
 
-async function cfgBool(sql: Sql, key: string, fallback: boolean): Promise<boolean> {
-  const rows = await sql.query<{ value: unknown }>("select value from system_config where key = $1", [key]);
-  const v = rows[0]?.value;
-  if (typeof v === "boolean") return v;
-  if (v === "true" || v === true) return true;
-  if (v === "false" || v === false) return false;
-  return fallback;
-}
-
-async function loadKill(sql: Sql): Promise<boolean> {
-  if (envFlag("KILL_SWITCH", false)) return true;
-  return cfgBool(sql, "kill_switch", false);
-}
-
-export async function setKillSwitch(on: boolean): Promise<void> {
-  const sql = await getSql();
+async function applySell(opts: {
+  sql: Sql;
+  pos: { id: unknown; asset_id: string; qty: number; avg_price: number };
+  r: RankedOpportunity | undefined;
+  mark: number;
+  intent: TradeIntent;
+  cash: number;
+  realized: number;
+}): Promise<{ cash: number; realized: number; closed: boolean }> {
+  const { sql, pos, r, mark, intent } = opts;
+  let { cash, realized } = opts;
+  const frac = clamp01(intent.fraction);
+  const qty = pos.qty * frac;
+  const notional = qty * mark;
+  const fill = simulateFill({
+    side: "sell",
+    mid: mark,
+    notionalUsd: notional,
+    liquidityUsd: r ? executableUsd(r) : 1_000_000,
+    volatilityPct: Math.abs(r?.asset.change24hPct ?? 5),
+    latencyMs: pickLatencyMs(`exit:${pos.asset_id}:${intent.strategyId}`),
+    gasUsd: gasForChain(r?.asset.chainId),
+    seed: `exit:${pos.asset_id}:${intent.strategyId}:${Date.now()}`,
+  });
+  if (!fill.ok) return { cash, realized, closed: false };
+  const proceeds = fill.qty * fill.price - fill.feeUsd - fill.gasUsd;
+  const costBasis = qty * pos.avg_price;
+  cash += proceeds;
+  realized += proceeds - costBasis;
+  const oid = rid();
   await sql.query(
-    `insert into system_config (key, value, updated_at) values ('kill_switch', $1::jsonb, now())
-     on conflict (key) do update set value = excluded.value, updated_at = now()`,
-    [JSON.stringify(on)],
+    `insert into paper_orders (id, portfolio_id, asset_id, side, type, status, requested_notional_usd, submitted_at, available_at, reason, latency_ms, assumed_mid)
+     values ($1,$2,$3,'sell','market','filled',$4,now(),now(),$5,$6,$7)`,
+    [oid, DEFAULT_PORTFOLIO_ID, pos.asset_id, notional, intent.reason.slice(0, 240), fill.latencyMs, mark],
   );
-  cache.overview = null;
+  await sql.query(
+    `insert into paper_fills (id, order_id, portfolio_id, asset_id, side, qty, price, notional_usd, fee_usd, slippage_bps, gas_usd, filled_at, model)
+     values ($1,$2,$3,$4,'sell',$5,$6,$7,$8,$9,$10,now(),$11)`,
+    [rid(), oid, DEFAULT_PORTFOLIO_ID, pos.asset_id, fill.qty, fill.price, fill.notionalUsd, fill.feeUsd, fill.slippageBps, fill.gasUsd, fill.model],
+  );
+  if (frac >= 0.999) {
+    await sql.query("delete from positions where id = $1", [pos.id]);
+    return { cash, realized, closed: true };
+  }
+  await sql.query("update positions set qty = qty - $2, updated_at = now() where id = $1", [pos.id, fill.qty]);
+  return { cash, realized, closed: false };
 }
 
-async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalDTO[], kill: boolean) {
+function clamp01(n: number): number {
+  if (!Number.isFinite(n)) return 1;
+  return Math.min(1, Math.max(0.05, n));
+}
+
+async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalDTO[], regime: RegimeInput) {
   const pRows = await sql.query<Record<string, unknown>>("select * from paper_portfolios where id = $1", [DEFAULT_PORTFOLIO_ID]);
   const p = pRows[0];
   if (!p) return;
@@ -350,45 +371,54 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
     );
   }
 
+  const openForExit: OpenPosition[] = posRows.map((pos) => ({
+    id: String(pos.id),
+    assetId: String(pos.asset_id),
+    qty: num0(pos.qty),
+    avgPrice: num0(pos.avg_price),
+    openedAt: String(pos.opened_at ?? nowIso()),
+    peakMark: pos.peak_mark_usd == null ? null : num0(pos.peak_mark_usd),
+  }));
+
   for (const pos of posRows) {
     const assetId = String(pos.asset_id);
-    const qty = num0(pos.qty);
-    const avg = num0(pos.avg_price);
-    const mark = marks.get(assetId) ?? avg;
-    if (!(qty > 0) || !(mark > 0)) continue;
-    const pnlPct = (mark - avg) / avg;
-    const opened = pos.opened_at ? new Date(String(pos.opened_at)).getTime() : Date.now();
-    const ageH = (Date.now() - opened) / 3_600_000;
-    const shouldExit = pnlPct <= -0.08 || pnlPct >= 0.18 || ageH >= 36;
-    if (!shouldExit) continue;
-    const asset = ranked.find((r) => r.asset.id === assetId)?.asset;
-    const fill = simulateFill({
-      side: "sell",
-      mid: mark,
-      notionalUsd: qty * mark,
-      liquidityUsd: asset?.liquidityUsd ?? 1_000_000,
-      volatilityPct: Math.abs(asset?.change24hPct ?? 5),
-      latencyMs: pickLatencyMs(`exit:${assetId}`),
-      gasUsd: gasForChain(asset?.chainId),
-      seed: `exit:${assetId}:${Date.now()}`,
+    const mark = marks.get(assetId) ?? num0(pos.avg_price);
+    if (mark > 0) {
+      try {
+        await sql.query(
+          "update positions set peak_mark_usd = greatest(coalesce(peak_mark_usd, 0), $2), last_mark_usd = $2, updated_at = now() where id = $1",
+          [pos.id, mark],
+        );
+      } catch {
+        /* column may not exist until 0003 applies */
+      }
+    }
+  }
+
+  const exits = decideExits({ positions: openForExit, ranked, signals, regime });
+  const exited = new Set<string>();
+  for (const intent of exits) {
+    const pos = posRows.find((row) => String(row.asset_id) === intent.assetId);
+    if (!pos || exited.has(intent.assetId)) continue;
+    const mark = marks.get(intent.assetId) ?? num0(pos.avg_price);
+    const r = ranked.find((x) => x.asset.id === intent.assetId);
+    const res = await applySell({
+      sql,
+      pos: { id: pos.id, asset_id: String(pos.asset_id), qty: num0(pos.qty), avg_price: num0(pos.avg_price) },
+      r,
+      mark,
+      intent,
+      cash,
+      realized,
     });
-    if (!fill.ok) continue;
-    const proceeds = fill.qty * fill.price - fill.feeUsd - fill.gasUsd;
-    const pnl = proceeds - qty * avg;
-    cash += proceeds;
-    realized += pnl;
-    const oid = rid();
+    cash = res.cash;
+    realized = res.realized;
+    if (res.closed) exited.add(intent.assetId);
     await sql.query(
-      `insert into paper_orders (id, portfolio_id, asset_id, side, type, status, requested_notional_usd, submitted_at, available_at, reason, latency_ms, assumed_mid)
-       values ($1,$2,$3,'sell','market','filled',$4,now(),now(),$5,$6,$7)`,
-      [oid, DEFAULT_PORTFOLIO_ID, assetId, qty * mark, "exit-rule", fill.latencyMs, mark],
+      `insert into alerts (id, kind, severity, title, body, asset_id, created_at, channel)
+       values ($1,'paper_trade','info',$2,$3,$4,now(),'in-app')`,
+      [rid(), `Paper SELL ${intent.symbol}`, intent.reason.slice(0, 240), intent.assetId],
     );
-    await sql.query(
-      `insert into paper_fills (id, order_id, portfolio_id, asset_id, side, qty, price, notional_usd, fee_usd, slippage_bps, gas_usd, filled_at, model)
-       values ($1,$2,$3,$4,'sell',$5,$6,$7,$8,$9,$10,now(),$11)`,
-      [rid(), oid, DEFAULT_PORTFOLIO_ID, assetId, fill.qty, fill.price, fill.notionalUsd, fill.feeUsd, fill.slippageBps, fill.gasUsd, fill.model],
-    );
-    await sql.query("delete from positions where id = $1", [pos.id]);
   }
 
   const openPos = await sql.query<{ asset_id: string; qty: number; avg_price: number }>(
@@ -402,99 +432,98 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
     equity += pos.qty * mark;
   }
 
-  if (!kill) {
-    const candidates = signals
-      .filter((s) => s.side === "buy" && s.status === "open" && !held.has(s.assetId))
-      .filter((s) => {
-        const r = ranked.find((x) => x.asset.id === s.assetId);
-        return r ? isQualityPaperEntry(r, s) : false;
-      })
-      .slice(0, 2);
-    for (const s of candidates) {
-      const r = ranked.find((x) => x.asset.id === s.assetId);
-      if (!r || !r.asset.priceUsd) continue;
-      if (!isQualityPaperEntry(r, s)) continue;
-      const size = positionSizeUsd(
-        equity,
-        s.confidence,
-        RISK_LIMITS.maxPositionPct,
-        r.asset.liquidityUsd ?? 0,
-        RISK_LIMITS.maxLiquidityTakePct,
-      );
-      if (size < 25) continue;
-      const slipBps = PAPER_FEES.baseSlippageBps + (size / Math.max(r.asset.liquidityUsd ?? 1, 1)) * 8500;
-      const chainNotional = openPos
-        .filter((p0) => ranked.find((x) => x.asset.id === p0.asset_id)?.asset.chainId === r.asset.chainId)
-        .reduce((a, p0) => a + p0.qty * (marks.get(p0.asset_id) ?? p0.avg_price), 0);
-      const gate = checkOrderRisk({
-        killSwitch: kill,
-        equity,
-        cash,
-        requestedNotional: size,
-        dayPnlUsd: equity - dayAnchor,
-        tokenNotionalAfter: size,
-        chainNotionalAfter: chainNotional + size,
-        liquidityUsd: r.asset.liquidityUsd ?? 0,
-        slippageBps: slipBps,
-        limits: RISK_LIMITS,
-      });
-      const latency = pickLatencyMs(s.id);
-      const oid = rid();
-      if (!gate.ok) {
-        await sql.query(
-          `insert into paper_orders (id, portfolio_id, signal_id, asset_id, side, type, status, requested_notional_usd, submitted_at, available_at, reason, latency_ms, assumed_mid)
-           values ($1,$2,$3,$4,'buy','market','rejected',$5,now(),now(),$6,$7,$8)`,
-          [oid, DEFAULT_PORTFOLIO_ID, s.id, s.assetId, size, gate.reasons.join("; "), latency, r.asset.priceUsd],
-        );
-        continue;
-      }
-      const fill = simulateFill({
-        side: "buy",
-        mid: r.asset.priceUsd,
-        notionalUsd: size,
-        liquidityUsd: r.asset.liquidityUsd ?? 0,
-        volatilityPct: Math.abs(r.asset.change24hPct ?? 8),
-        latencyMs: latency,
-        gasUsd: gasForChain(r.asset.chainId),
-        seed: `buy:${s.id}`,
-      });
-      if (!fill.ok) {
-        await sql.query(
-          `insert into paper_orders (id, portfolio_id, signal_id, asset_id, side, type, status, requested_notional_usd, submitted_at, available_at, reason, latency_ms, assumed_mid)
-           values ($1,$2,$3,$4,'buy','market','rejected',$5,now(),now(),$6,$7,$8)`,
-          [oid, DEFAULT_PORTFOLIO_ID, s.id, s.assetId, size, fill.rejectReason, latency, r.asset.priceUsd],
-        );
-        continue;
-      }
-      const cost = fill.notionalUsd + fill.feeUsd + fill.gasUsd;
-      if (cost > cash) continue;
-      cash -= cost;
+  const entries = decideEntries({
+    ranked,
+    signals,
+    held,
+    regime,
+    openCount: openPos.length,
+  });
+
+  for (const intent of entries) {
+    const r = ranked.find((x) => x.asset.id === intent.assetId);
+    if (!r || !r.asset.priceUsd || held.has(intent.assetId)) continue;
+    const size = sizeUsd({ equity, cash, confidence: intent.confidence, r, regime });
+    if (size < PAPER_ENGINE.minOrderUsd) continue;
+    const slipBps = PAPER_FEES.baseSlippageBps + (size / Math.max(executableUsd(r), 1)) * 8500;
+    const chainNotional = openPos
+      .filter((p0) => ranked.find((x) => x.asset.id === p0.asset_id)?.asset.chainId === r.asset.chainId)
+      .reduce((a, p0) => a + p0.qty * (marks.get(p0.asset_id) ?? p0.avg_price), 0);
+    const gate = checkOrderRisk({
+      equity,
+      cash,
+      requestedNotional: size,
+      dayPnlUsd: equity - dayAnchor,
+      tokenNotionalAfter: size,
+      chainNotionalAfter: chainNotional + size,
+      liquidityUsd: executableUsd(r),
+      slippageBps: slipBps,
+      limits: RISK_LIMITS,
+    });
+    const latency = pickLatencyMs(intent.strategyId + intent.assetId);
+    const oid = rid();
+    if (!gate.ok) {
       await sql.query(
-        `insert into paper_orders (id, portfolio_id, signal_id, asset_id, side, type, status, requested_notional_usd, submitted_at, available_at, reason, latency_ms, assumed_mid)
-         values ($1,$2,$3,$4,'buy','market','filled',$5,now(),now(),$6,$7,$8)`,
-        [oid, DEFAULT_PORTFOLIO_ID, s.id, s.assetId, size, "signal-entry", latency, r.asset.priceUsd],
+        `insert into paper_orders (id, portfolio_id, asset_id, side, type, status, requested_notional_usd, submitted_at, available_at, reason, latency_ms, assumed_mid)
+         values ($1,$2,$3,'buy','market','rejected',$4,now(),now(),$5,$6,$7)`,
+        [oid, DEFAULT_PORTFOLIO_ID, intent.assetId, size, gate.reasons.join("; ").slice(0, 240), latency, r.asset.priceUsd],
       );
-      await sql.query(
-        `insert into paper_fills (id, order_id, portfolio_id, asset_id, side, qty, price, notional_usd, fee_usd, slippage_bps, gas_usd, filled_at, model)
-         values ($1,$2,$3,$4,'buy',$5,$6,$7,$8,$9,$10,now(),$11)`,
-        [rid(), oid, DEFAULT_PORTFOLIO_ID, s.assetId, fill.qty, fill.price, fill.notionalUsd, fill.feeUsd, fill.slippageBps, fill.gasUsd, fill.model],
-      );
-      await sql.query(
-        `insert into positions (id, portfolio_id, asset_id, qty, avg_price, opened_at, updated_at)
-         values ($1,$2,$3,$4,$5,now(),now())
-         on conflict (portfolio_id, asset_id) do update set
-           qty = positions.qty + excluded.qty,
-           avg_price = (positions.avg_price * positions.qty + excluded.avg_price * excluded.qty) / nullif(positions.qty + excluded.qty, 0),
-           updated_at = now()`,
-        [rid(), DEFAULT_PORTFOLIO_ID, s.assetId, fill.qty, fill.price],
-      );
-      held.add(s.assetId);
-      await sql.query(
-        `insert into alerts (id, kind, severity, title, body, asset_id, created_at, channel)
-         values ($1,'paper_trade','info',$2,$3,$4,now(),'in-app')`,
-        [rid(), `Paper ${s.side} ${r.asset.symbol}`, `Filled ${fill.qty} @ ${fill.price} (slip ${fill.slippageBps} bps)`, s.assetId],
-      );
+      continue;
     }
+    const fill = simulateFill({
+      side: "buy",
+      mid: r.asset.priceUsd,
+      notionalUsd: size,
+      liquidityUsd: executableUsd(r),
+      volatilityPct: Math.abs(r.asset.change24hPct ?? 8),
+      latencyMs: latency,
+      gasUsd: gasForChain(r.asset.chainId),
+      seed: `buy:${intent.strategyId}:${intent.assetId}`,
+    });
+    if (!fill.ok) {
+      await sql.query(
+        `insert into paper_orders (id, portfolio_id, asset_id, side, type, status, requested_notional_usd, submitted_at, available_at, reason, latency_ms, assumed_mid)
+         values ($1,$2,$3,'buy','market','rejected',$4,now(),now(),$5,$6,$7)`,
+        [oid, DEFAULT_PORTFOLIO_ID, intent.assetId, size, (fill.rejectReason ?? "rejected").slice(0, 240), latency, r.asset.priceUsd],
+      );
+      continue;
+    }
+    const cost = fill.notionalUsd + fill.feeUsd + fill.gasUsd;
+    if (cost > cash) continue;
+    cash -= cost;
+    await sql.query(
+      `insert into paper_orders (id, portfolio_id, asset_id, side, type, status, requested_notional_usd, submitted_at, available_at, reason, latency_ms, assumed_mid)
+       values ($1,$2,$3,'buy','market','filled',$4,now(),now(),$5,$6,$7)`,
+      [oid, DEFAULT_PORTFOLIO_ID, intent.assetId, size, intent.reason.slice(0, 240), latency, r.asset.priceUsd],
+    );
+    await sql.query(
+      `insert into paper_fills (id, order_id, portfolio_id, asset_id, side, qty, price, notional_usd, fee_usd, slippage_bps, gas_usd, filled_at, model)
+       values ($1,$2,$3,$4,'buy',$5,$6,$7,$8,$9,$10,now(),$11)`,
+      [rid(), oid, DEFAULT_PORTFOLIO_ID, intent.assetId, fill.qty, fill.price, fill.notionalUsd, fill.feeUsd, fill.slippageBps, fill.gasUsd, fill.model],
+    );
+    await sql.query(
+      `insert into positions (id, portfolio_id, asset_id, qty, avg_price, opened_at, updated_at)
+       values ($1,$2,$3,$4,$5,now(),now())
+       on conflict (portfolio_id, asset_id) do update set
+         qty = positions.qty + excluded.qty,
+         avg_price = (positions.avg_price * positions.qty + excluded.avg_price * excluded.qty) / nullif(positions.qty + excluded.qty, 0),
+         updated_at = now()`,
+      [rid(), DEFAULT_PORTFOLIO_ID, intent.assetId, fill.qty, fill.price],
+    );
+    try {
+      await sql.query(
+        "update positions set peak_mark_usd = $2, last_mark_usd = $2 where portfolio_id = $1 and asset_id = $3",
+        [DEFAULT_PORTFOLIO_ID, fill.price, intent.assetId],
+      );
+    } catch {
+      /* optional columns */
+    }
+    held.add(intent.assetId);
+    await sql.query(
+      `insert into alerts (id, kind, severity, title, body, asset_id, created_at, channel)
+       values ($1,'paper_trade','info',$2,$3,$4,now(),'in-app')`,
+      [rid(), `Paper BUY ${r.asset.symbol}`, `Filled ${fill.qty} @ ${fill.price} (${intent.strategyId}, slip ${fill.slippageBps} bps)`, intent.assetId],
+    );
   }
 
   const pos2 = await sql.query<{ asset_id: string; qty: number; avg_price: number }>(
@@ -568,17 +597,22 @@ async function assemblePortfolio(sql: Sql, ranked: RankedOpportunity[]): Promise
   );
   const feesPaidUsd = fills.reduce((a, f) => a + num0(f.fee_usd) + num0(f.gas_usd), 0);
   const slippagePaidUsd = fills.reduce((a, f) => a + (num0(f.notional_usd) * num0(f.slippage_bps)) / 10_000, 0);
-  const kill = await loadKill(sql);
   const cash = num0(p?.cash_usd);
   const unreal = positions.reduce((a, x) => a + x.unrealizedPnlUsd, 0);
   const equity = cash + positions.reduce((a, x) => a + x.notionalUsd, 0);
   const start = num0(p?.starting_equity_usd) || 10_000;
   const dayPnl = num0(p?.day_pnl_usd);
+  const sellFills = fills.filter((f) => f.side === "sell");
+  const wins = sellFills.filter((f) => {
+    const pos = positions.find((x) => x.assetId === String(f.asset_id));
+    return num0(f.price) > (pos?.avgPrice ?? num0(f.price));
+  });
+  const closedSells = fills.filter((f) => String(f.side) === "sell");
+  const winRate = closedSells.length ? wins.length / Math.max(closedSells.length, 1) : null;
   return {
     id: DEFAULT_PORTFOLIO_ID,
     name: String(p?.name ?? "Default paper desk"),
     tradingMode: "PAPER",
-    killSwitch: kill,
     startingEquityUsd: start,
     cashUsd: cash,
     equityUsd: equity,
@@ -619,7 +653,7 @@ async function assemblePortfolio(sql: Sql, ranked: RankedOpportunity[]): Promise
     feesPaidUsd,
     slippagePaidUsd,
     nTrades: fills.length,
-    winRate: null,
+    winRate,
   };
 }
 
@@ -641,7 +675,7 @@ async function ingestOnce(): Promise<void> {
   await sql.query(`insert into ingest_runs (id, started_at, status) values ($1, now(), 'running')`, [runId]);
   const errors: string[] = [];
   try {
-    const [cg, global, trending, ds, pools, news, pm, fng, cb, xPosts] = await Promise.all([
+    const [cg, global, trending, ds, pools, news, pm, fng, cb, xPosts, extras] = await Promise.all([
       fetchCoinGeckoMarkets(100),
       fetchCoinGeckoGlobal(),
       fetchTrending(),
@@ -652,12 +686,14 @@ async function ingestOnce(): Promise<void> {
       fetchFearGreed(),
       fetchCoinbaseSpot(),
       maybeFetchX(sql),
+      fetchDeskExtras(),
     ]);
 
     const health: HealthPing[] = [
       cg.health, global.health, trending.health, ds.health, pools.health,
       ...news.health, pm.health, fng.health, cb.health, xPosts.health,
-    ];
+      ...extras.health,
+    ].map((h) => ({ ...h, error: sanitizePublicError(h.error) }));
     await recordHealth(sql, health);
 
     const merged = new Map<string, NormalizedAsset>();
@@ -683,6 +719,22 @@ async function ingestOnce(): Promise<void> {
     if (eth && cb.eth) eth.priceUsd = cb.eth;
     const sol = merged.get("cg:solana");
     if (sol && cb.sol) sol.priceUsd = cb.sol;
+
+    const overlayBySym = new Map<string, { priceUsd: number; change24hPct: number | null }>();
+    for (const o of extras.overlays) {
+      overlayBySym.set(o.symbol.toUpperCase(), { priceUsd: o.priceUsd, change24hPct: o.change24hPct });
+    }
+    const overlayTs = nowIso();
+    for (const a of merged.values()) {
+      const ov = overlayBySym.get(a.symbol.toUpperCase());
+      if (!ov) continue;
+      if (ov.priceUsd > 0) {
+        a.priceUsd = ov.priceUsd;
+        a.observedAt = overlayTs;
+        a.sourceTimestamp = overlayTs;
+      }
+      if (ov.change24hPct != null) a.change24hPct = ov.change24hPct;
+    }
 
     for (const [id, a] of [...merged.entries()]) {
       if (!(a.priceUsd && a.priceUsd > 0) || !a.observedAt) {
@@ -716,7 +768,7 @@ async function ingestOnce(): Promise<void> {
     const symbols = [...merged.values()].map((a) => a.symbol.toUpperCase()).filter((s) => s.length >= 3 && !STOP_WORDS.has(s));
     const uniqueSym = [...new Set(symbols)];
 
-    for (const art of news.articles) {
+    for (const art of [...news.articles, ...extras.news]) {
       const entities = extractEntities(`${art.title} ${art.summary ?? ""}`, uniqueSym);
       await sql.query(
         `insert into news_articles (id, source, source_reliability, title, url, summary, entities, published_at, observed_at, ingested_at, freshness)
@@ -729,7 +781,7 @@ async function ingestOnce(): Promise<void> {
       );
     }
 
-    for (const s of [...ds.social, ...xPosts.posts]) {
+    for (const s of [...ds.social, ...xPosts.posts, ...extras.reddit]) {
       const entities = extractEntities(s.body, uniqueSym);
       await sql.query(
         `insert into social_posts (id, platform, author, url, body, engagement, source_reliability, entities, published_at, observed_at, ingested_at, freshness)
@@ -936,7 +988,15 @@ async function ingestOnce(): Promise<void> {
     }
     ranked.sort(compareOpportunities);
 
-    const gen = generateSignals({ ranked, news: newsDto, social: socialDto, polymarket: pmDto, trendingSymbols, walletHits });
+    const gen = generateSignals({
+      ranked,
+      news: newsDto,
+      social: socialDto,
+      polymarket: pmDto,
+      trendingSymbols,
+      walletHits,
+      btcChange24h: ranked.find((r) => r.asset.id === "cg:bitcoin")?.asset.change24hPct ?? null,
+    });
     let signalsCreated = 0;
     for (const s of gen) {
       const exists = await sql.query<{ id: string }>(
@@ -973,10 +1033,6 @@ async function ingestOnce(): Promise<void> {
       explanation: parseJsonArray(r.explanation),
     }));
 
-    const kill = await loadKill(sql);
-    await paperTick(sql, ranked, signalDto, kill);
-    const portfolio = await assemblePortfolio(sql, ranked);
-    const sources = await sql.query<Record<string, unknown>>("select * from source_health order by source");
     const btcA = ranked.find((r) => r.asset.id === "cg:bitcoin");
     const ethA = ranked.find((r) => r.asset.id === "cg:ethereum");
     const regimeLabel =
@@ -985,13 +1041,25 @@ async function ingestOnce(): Promise<void> {
         : (fng.value ?? 50) > 70 && (btcA?.asset.change24hPct ?? 0) > 2
           ? "Risk-on / greedy"
           : "Mixed / transitional";
+    const regime: RegimeInput = {
+      fearGreed: fng.value,
+      btcChange24h: btcA?.asset.change24hPct ?? null,
+      ethChange24h: ethA?.asset.change24hPct ?? null,
+      btcFundingPct: extras.fundingBtcPct,
+      label: regimeLabel,
+      dxyChangePct: extras.macro.dxyChangePct,
+      spxChangePct: extras.macro.spxChangePct,
+      mempoolFastSatVb: extras.mempoolFastSatVb,
+    };
+    await paperTick(sql, ranked, signalDto, regime);
+    const portfolio = await assemblePortfolio(sql, ranked);
+    const sources = await sql.query<Record<string, unknown>>("select * from source_health order by source");
 
     const live = evaluateLiveGates();
     cache.overview = {
       generatedAt: nowIso(),
       tradingMode: "PAPER",
       liveArmed: live.canSubmit,
-      killSwitch: kill,
       portfolio,
       regime: {
         fearGreed: fng.value,
@@ -1000,6 +1068,19 @@ async function ingestOnce(): Promise<void> {
         ethChange24h: ethA?.asset.change24hPct ?? null,
         btcDominancePct: global.dominance,
         label: regimeLabel,
+        btcFundingPct: extras.fundingBtcPct,
+        ethFundingPct: extras.fundingEthPct,
+        defiTvlUsd: extras.defiTvlUsd,
+        stablecapUsd: extras.stablecapUsd,
+        mempoolFastSatVb: extras.mempoolFastSatVb,
+        hashrateEh: extras.hashrateEh,
+        dxy: extras.macro.dxy,
+        dxyChangePct: extras.macro.dxyChangePct,
+        spx: extras.macro.spx,
+        spxChangePct: extras.macro.spxChangePct,
+        gold: extras.macro.gold,
+        goldChangePct: extras.macro.goldChangePct,
+        paprikaCapUsd: extras.paprikaCapUsd,
       },
       opportunities: ranked.slice(0, 40),
       signals: signalDto,
@@ -1011,7 +1092,7 @@ async function ingestOnce(): Promise<void> {
         status: (s.status as SourceHealth["status"]) ?? "down",
         latencyMs: s.latency_ms == null ? null : num0(s.latency_ms),
         lastSuccessAt: s.last_success_at ? String(s.last_success_at) : null,
-        lastError: s.last_error ? String(s.last_error) : null,
+        lastError: sanitizePublicError(s.last_error ? String(s.last_error) : null),
       })),
       lastIngestAt: nowIso(),
       ingestStatus: "ok",
@@ -1020,9 +1101,10 @@ async function ingestOnce(): Promise<void> {
       xUsage: xUsageDto(xPosts.budget),
     };
     cache.lastIngestAt = Date.now();
+    await maybeStoreDigest(sql, cache.overview);
     await sql.query(
       `update ingest_runs set finished_at=now(), status='ok', assets_upserted=$2, signals_created=$3, errors=$4::jsonb, duration_ms=$5 where id=$1`,
-      [runId, merged.size, signalsCreated, JSON.stringify(errors), Date.now() - t0],
+      [runId, merged.size, signalsCreated, JSON.stringify(errors.map((e) => sanitizePublicError(e) ?? e)), Date.now() - t0],
     );
   } catch (e) {
     const msg = e instanceof Error ? e.message : "ingest failed";
@@ -1143,10 +1225,10 @@ export async function getSystem(): Promise<SystemDTO> {
   const run = (await sql.query<Record<string, unknown>>("select * from ingest_runs order by started_at desc limit 1"))[0];
   const alerts = await sql.query<Record<string, unknown>>("select id, kind, severity, title, created_at from alerts order by created_at desc limit 30");
   const live = evaluateLiveGates();
+  const meta = await loadLatestDigestMeta();
   return {
     tradingMode: "PAPER",
     liveGates: live.gates,
-    killSwitch: o.killSwitch,
     sources: o.sources,
     lastIngest: {
       startedAt: run?.started_at ? String(run.started_at) : null,
@@ -1155,7 +1237,7 @@ export async function getSystem(): Promise<SystemDTO> {
       durationMs: run?.duration_ms == null ? null : num0(run.duration_ms),
       assetsUpserted: run?.assets_upserted == null ? null : num0(run.assets_upserted),
       signalsCreated: run?.signals_created == null ? null : num0(run.signals_created),
-      errors: parseJsonArray(run?.errors),
+      errors: parseJsonArray(run?.errors).map((e) => sanitizePublicError(e) ?? e),
     },
     dbSource,
     paperStartingEquity: o.portfolio.startingEquityUsd,
@@ -1164,6 +1246,8 @@ export async function getSystem(): Promise<SystemDTO> {
     })),
     xUsage: o.xUsage,
     pollMs: INGEST_POLL_MS,
+    lastDigestAt: meta.generatedAt,
+    digestSchedule: "08:00 and 20:00 Europe/London — emailed privately, never shown on this public desk",
   };
 }
 export async function getStrategies() {
@@ -1279,10 +1363,10 @@ export async function listBacktests(): Promise<BacktestDTO[]> {
 export async function placeManualPaperTrade(input: { assetId: string; side: "buy" | "sell"; notionalUsd: number }) {
   const o = await ensureIngested(false);
   const sql = await getSql();
-  if (await loadKill(sql)) return { ok: false as const, error: "Kill switch is engaged" };
   const asset = o.opportunities.find((x) => x.asset.id === input.assetId)?.asset ?? (await getToken(input.assetId))?.asset;
   if (!asset?.priceUsd) return { ok: false as const, error: "No mark price" };
-  if ((asset.dataAgeMs ?? Number.POSITIVE_INFINITY) > PRICE_TRADE_STALE_MS) {
+  const age = asset.dataAgeMs;
+  if (age != null && Number.isFinite(age) && age > PRICE_TRADE_STALE_MS) {
     return { ok: false as const, error: "Mark is stale — wait for the next live ingest" };
   }
   const fill = simulateFill({
@@ -1309,3 +1393,24 @@ export async function placeManualPaperTrade(input: { assetId: string; side: "buy
 }
 
 export { formatAge };
+
+async function maybeStoreDigest(sql: Sql, overview: OverviewDTO): Promise<void> {
+  const hit = londonSlot();
+  if (!hit) return;
+  const key = digestKey(hit.slot, hit.date);
+  if (await wasDigestSent(key)) return;
+  const report = buildDigest(overview, hit.slot);
+  await rememberDigest(key, report);
+  try {
+    await sql.query(
+      `insert into digest_reports (id, slot, generated_at, subject, body_text, created_at)
+       values ($1,$2,now(),$3,$4,now())
+       on conflict (id) do nothing`,
+      [key, hit.slot, report.subject, report.text],
+    );
+  } catch {
+    /* table arrives with 0003 */
+  }
+  overview.lastDigestAt = report.generatedAt;
+  overview.nextDigestSlot = hit.slot === "morning" ? "20:00 Europe/London" : "08:00 Europe/London";
+}

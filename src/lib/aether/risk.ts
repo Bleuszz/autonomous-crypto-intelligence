@@ -163,7 +163,6 @@ export type RiskLimitCheck = {
 };
 
 export function checkOrderRisk(opts: {
-  killSwitch: boolean;
   equity: number;
   cash: number;
   requestedNotional: number;
@@ -182,7 +181,6 @@ export function checkOrderRisk(opts: {
   };
 }): RiskLimitCheck {
   const reasons: string[] = [];
-  if (opts.killSwitch) reasons.push("Kill switch is engaged");
   if (opts.equity <= 0) reasons.push("Equity is non-positive");
   if (opts.requestedNotional > opts.cash + 1e-6) reasons.push("Insufficient cash");
   if (opts.requestedNotional > opts.equity * opts.limits.maxPositionPct + 1e-6) {

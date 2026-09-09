@@ -16,13 +16,36 @@ export const SCORE_WEIGHTS = {
 } as const;
 
 export const RISK_LIMITS = {
-  maxPositionPct: 0.1,
+  maxPositionPct: 0.12,
   maxDailyLossPct: 0.08,
   maxTokenConcentrationPct: 0.25,
   maxChainExposurePct: 0.5,
   maxLiquidityTakePct: 0.02,
   maxSlippageBps: 150,
   maxTradeLossPct: 0.04,
+} as const;
+
+export const PAPER_ENGINE = {
+  maxOpenPositions: 6,
+  maxNewPerCycle: 4,
+  minCashPct: 0.22,
+  minOrderUsd: 80,
+  majorStopPct: 0.045,
+  dexStopPct: 0.07,
+  majorTakePct: 0.07,
+  dexTakePct: 0.12,
+  majorTrailPct: 0.028,
+  dexTrailPct: 0.05,
+  trailArmPct: 0.03,
+  staleHoursCut: 10,
+  maxHoldHours: 40,
+  minConfidenceMajor: 0.48,
+  minConfidenceDex: 0.58,
+  minMajorVolumeUsd: 750_000,
+  minDexLiqUsd: 150_000,
+  maxDexRug: 0.4,
+  maxAbsChangeMajor: 55,
+  maxAbsChangeDex: 45,
 } as const;
 
 export const PAPER_FEES = {
@@ -40,8 +63,8 @@ export const INGEST_TTL_MS = 150_000;
 /** Background desk poll — public providers only; X is gated separately. */
 export const INGEST_POLL_MS = 180_000;
 export const PRICE_STALE_MS = 180_000;
-/** Marks older than this cannot open a paper fill. */
-export const PRICE_TRADE_STALE_MS = 180_000;
+/** Marks older than this cannot open a paper fill. CG last_updated often lags ~few minutes. */
+export const PRICE_TRADE_STALE_MS = 12 * 60_000;
 export const RANK_STALE_MS = 8 * 60_000;
 export const NEWS_NEW_MS = 30 * 60_000;
 export const NEWS_RECENT_MS = 6 * 60 * 60_000;
@@ -96,6 +119,18 @@ export const SOURCE_RELIABILITY: Record<string, number> = {
   x: 0.55,
   reddit: 0.4,
   trending: 0.5,
+  kraken_ticker: 0.9,
+  okx: 0.84,
+  defillama: 0.8,
+  mempool_fees: 0.78,
+  coinpaprika: 0.7,
+  yahoo_macro: 0.74,
+  bitcoinmagazine: 0.74,
+  cryptoslate: 0.66,
+  blockworks: 0.72,
+  thedefiant: 0.7,
+  binance: 0.88,
+  coincap: 0.7,
 };
 
 export function envFlag(key: string, fallback = false): boolean {

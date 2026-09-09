@@ -207,7 +207,6 @@ export type PortfolioDTO = {
   id: string;
   name: string;
   tradingMode: "PAPER" | "LIVE";
-  killSwitch: boolean;
   startingEquityUsd: number;
   cashUsd: number;
   equityUsd: number;
@@ -280,6 +279,19 @@ export type RegimeDTO = {
   ethChange24h: number | null;
   btcDominancePct: number | null;
   label: string;
+  btcFundingPct?: number | null;
+  ethFundingPct?: number | null;
+  defiTvlUsd?: number | null;
+  stablecapUsd?: number | null;
+  mempoolFastSatVb?: number | null;
+  hashrateEh?: number | null;
+  dxy?: number | null;
+  dxyChangePct?: number | null;
+  spx?: number | null;
+  spxChangePct?: number | null;
+  gold?: number | null;
+  goldChangePct?: number | null;
+  paprikaCapUsd?: number | null;
 };
 
 export type ResearchDTO = {
@@ -310,7 +322,6 @@ export type OverviewDTO = {
   generatedAt: string;
   tradingMode: "PAPER" | "LIVE";
   liveArmed: boolean;
-  killSwitch: boolean;
   portfolio: PortfolioDTO;
   regime: RegimeDTO;
   opportunities: RankedOpportunity[];
@@ -328,12 +339,13 @@ export type OverviewDTO = {
     ranked: number;
   };
   xUsage: XUsageDTO;
+  lastDigestAt?: string | null;
+  nextDigestSlot?: string | null;
 };
 
 export type SystemDTO = {
   tradingMode: "PAPER" | "LIVE";
   liveGates: { name: string; passed: boolean; detail: string }[];
-  killSwitch: boolean;
   sources: SourceHealth[];
   lastIngest: {
     startedAt: string | null;
@@ -349,4 +361,6 @@ export type SystemDTO = {
   alerts: { id: string; kind: string; severity: string; title: string; createdAt: string }[];
   xUsage: XUsageDTO;
   pollMs: number;
+  lastDigestAt: string | null;
+  digestSchedule: string;
 };

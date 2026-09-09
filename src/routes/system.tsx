@@ -1,10 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { createFileRoute } from "@tanstack/react-router";
-import { fetchSystem, postKillSwitch, refreshNow } from "@/lib/aether/api";
+import { fetchSystem, refreshNow } from "@/lib/aether/api";
 import { ErrorState, PageHeader } from "@/components/desk";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Switch } from "@/components/ui/switch";
 import { Skeleton } from "@/components/ui/skeleton";
 
 export const Route = createFileRoute("/system")({ component: SystemPage });
@@ -12,10 +11,6 @@ export const Route = createFileRoute("/system")({ component: SystemPage });
 function SystemPage() {
   const qc = useQueryClient();
   const q = useQuery({ queryKey: ["system"], queryFn: () => fetchSystem() });
-  const kill = useMutation({
-    mutationFn: (on: boolean) => postKillSwitch({ data: { on } }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["system"] }),
-  });
   const refresh = useMutation({
     mutationFn: () => refreshNow(),
     onSuccess: () => qc.invalidateQueries(),
@@ -30,7 +25,7 @@ function SystemPage() {
       <PageHeader
         kicker="Ops"
         title="System"
-        description="Health, freshness, live-trading gates (all closed), and the global kill switch."
+        description="Health, freshness, and live-trading gates. This public desk never shows API keys, tokens, or personal details."
         action={
           <Button variant="outline" onClick={() => refresh.mutate()} disabled={refresh.isPending}>
             Force ingest
@@ -40,16 +35,21 @@ function SystemPage() {
       <div className="mb-6 flex flex-wrap items-center gap-3">
         <Badge variant="paper">{s.tradingMode}</Badge>
         <Badge variant="outline">DB {s.dbSource}</Badge>
-        <label className="flex min-h-11 items-center gap-3 text-sm">
-          Kill switch
-          <Switch checked={s.killSwitch} onCheckedChange={(v) => kill.mutate(Boolean(v))} />
-        </label>
+        <Badge variant="outline">Paper orders on</Badge>
       </div>
+
+      <section className="mb-6 rounded-xl border border-border bg-card p-5">
+        <h2 className="text-sm font-medium">Private desk notes</h2>
+        <p className="mt-1 text-sm text-muted-foreground">{s.digestSchedule}</p>
+        <p className="mt-2 font-mono text-xs text-muted-foreground">
+          Last note built {s.lastDigestAt ?? "—"}
+        </p>
+      </section>
 
       <section className="mb-6 rounded-xl border border-border bg-card p-5">
         <h2 className="text-sm font-medium">Live execution gates</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          All gates are fail-closed. An API key alone cannot arm live trading. This build refuses live submission even if every gate is later flipped.
+          All gates are fail-closed. Credential values are never rendered. This build refuses live submission even if every gate is later flipped.
         </p>
         <ul className="mt-4 space-y-2">
           {s.liveGates.map((g) => (
@@ -67,7 +67,7 @@ function SystemPage() {
       <section className="mb-6 rounded-xl border border-border bg-card p-5">
         <h2 className="text-sm font-medium">X API budget</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Capped so a $5 credit lasts about a week. Live trading is not using this key.
+          Capped so a small credit lasts about a week. Presence is shown, never the token.
         </p>
         <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
           <div className="flex justify-between gap-3">
@@ -92,7 +92,7 @@ function SystemPage() {
           </div>
         </dl>
         {s.xUsage.lastError ? <p className="mt-2 text-xs text-muted-foreground">{s.xUsage.lastError}</p> : null}
-        <p className="mt-2 text-[11px] text-muted-foreground">Market poll every {Math.round(s.pollMs / 1000)}s (free sources). X is not on that cadence.</p>
+        <p className="mt-2 text-xs text-muted-foreground">Market poll every {Math.round(s.pollMs / 1000)}s (free sources). X is not on that cadence.</p>
       </section>
 
       <section className="mb-6 rounded-xl border border-border bg-card p-5">
@@ -118,7 +118,7 @@ function SystemPage() {
             <li key={src.source} className="flex items-center justify-between border-b border-border px-5 py-3 last:border-0">
               <div>
                 <p className="text-sm">{src.source}</p>
-                <p className="text-[11px] text-muted-foreground">{src.lastError ?? "ok"} · {src.latencyMs ?? "—"} ms</p>
+                <p className="text-xs text-muted-foreground">{src.lastError ?? "ok"} · {src.latencyMs ?? "—"} ms</p>
               </div>
               <Badge variant={src.status === "up" ? "up" : src.status === "degraded" ? "warn" : "down"}>{src.status}</Badge>
             </li>

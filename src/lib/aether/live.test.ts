@@ -9,7 +9,7 @@ describe("live gates", () => {
         BINANCE_API_KEY: "x",
         BINANCE_API_SECRET: "y",
       },
-      { tradingMode: "PAPER", enableLiveTrading: false, killSwitch: false },
+      { tradingMode: "PAPER", enableLiveTrading: false },
     );
     assert.equal(r.canSubmit, false);
     assert.equal(r.armed, false);
@@ -26,7 +26,7 @@ describe("live gates", () => {
         BINANCE_API_SECRET: "y",
         GROK_PROJECT_ID: "prod",
       },
-      { tradingMode: "LIVE", enableLiveTrading: true, killSwitch: false },
+      { tradingMode: "LIVE", enableLiveTrading: true },
     );
     assert.equal(r.canSubmit, false);
     assert.ok(r.gates.some((g) => g.name === "Hard disable" || !g.passed));

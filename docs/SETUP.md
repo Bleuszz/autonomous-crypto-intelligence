@@ -36,10 +36,10 @@ Edit `secrets/runtime.env` and set at least:
 ```bash
 TRADING_MODE=PAPER
 ENABLE_LIVE_TRADING=false
-KILL_SWITCH=false
 X_API_KEY=<consumer key>
 X_API_SECRET=<consumer secret>
 X_BEARER_TOKEN=<paste exactly as the X portal shows it>
+DIGEST_TO=<private; never commit>
 ```
 
 Do **not** URI-decode the bearer. Do **not** commit `secrets/`. The spend ledger is `secrets/x-budget.json` (also gitignored). Caps: 8 calls/day, 48/week, 3 hours between calls.

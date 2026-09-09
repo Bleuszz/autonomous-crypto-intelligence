@@ -1,4 +1,4 @@
-import { envFlag, envStr, type TradingMode } from "./config.ts";
+import { envStr, type TradingMode } from "./config.ts";
 
 export type LiveGate = { name: string; passed: boolean; detail: string };
 
@@ -11,15 +11,14 @@ export type LiveEvaluation = {
 
 /**
  * LIVE must never activate merely because an API key exists.
- * Every gate is fail-closed. The execution unlock phrase is an extra tripwire
- * so a software bug cannot submit a real order.
+ * Every gate is fail-closed. Presence of credentials is reported as a boolean
+ * only — values are never copied into the public DTO.
  */
 export function evaluateLiveGates(
   env: Record<string, string | undefined> = typeof process === "undefined" ? {} : (process.env as Record<string, string | undefined>),
-  cfg: { tradingMode: TradingMode; enableLiveTrading: boolean; killSwitch: boolean } = {
+  cfg: { tradingMode: TradingMode; enableLiveTrading: boolean } = {
     tradingMode: "PAPER",
     enableLiveTrading: false,
-    killSwitch: false,
   },
 ): LiveEvaluation {
   const get = (k: string) => env[k] ?? envStr(k);
@@ -50,11 +49,6 @@ export function evaluateLiveGates(
       detail: `config=${cfg.tradingMode} env=${get("TRADING_MODE") ?? "PAPER"}`,
     },
     {
-      name: "Kill switch",
-      passed: cfg.killSwitch === false && !flag("KILL_SWITCH"),
-      detail: cfg.killSwitch || flag("KILL_SWITCH") ? "engaged — all new orders blocked" : "clear",
-    },
-    {
       name: "Execution unlock phrase",
       passed: unlock,
       detail: unlock ? "present" : "LIVE_EXECUTION_UNLOCK is not set to the required phrase",
@@ -62,7 +56,7 @@ export function evaluateLiveGates(
     {
       name: "Separate live credentials",
       passed: hasExchangeCreds,
-      detail: hasExchangeCreds ? "exchange API keys present (withdrawals must be disabled at the venue)" : "no live exchange credentials",
+      detail: hasExchangeCreds ? "exchange API keys present (values never shown)" : "no live exchange credentials",
     },
     {
       name: "Not a preview accident",
@@ -74,7 +68,7 @@ export function evaluateLiveGates(
   const armed = gates.every((g) => g.passed);
   return {
     requestedMode: cfg.tradingMode,
-    armed: false, // hard-disable: never report armed until canSubmit is actually true
+    armed: false,
     canSubmit: false,
     gates: armed
       ? [
@@ -93,8 +87,4 @@ export function assertPaperOnly(evaluation: LiveEvaluation = evaluateLiveGates()
   if (evaluation.canSubmit) {
     throw new Error("Live submission unexpectedly armed");
   }
-}
-
-export function envKillSwitch(): boolean {
-  return envFlag("KILL_SWITCH", false);
 }

@@ -66,7 +66,7 @@ function Home() {
 
       <div className="mb-6 flex flex-wrap gap-2">
         <Badge variant="paper">PAPER</Badge>
-        {d.killSwitch ? <Badge variant="down">Kill switch</Badge> : <Badge variant="outline">Orders armed (paper)</Badge>}
+        <Badge variant="outline">Orders armed (paper)</Badge>
         <Badge variant="outline">Snapshot {formatUtc(d.lastIngestAt)}</Badge>
         <Badge variant="outline">
           {d.scanCapacity.majors} majors · {d.scanCapacity.dex} dex · {d.scanCapacity.ranked} ranked
@@ -94,6 +94,24 @@ function Home() {
           value={d.regime.label}
           hint={`F&G ${d.regime.fearGreed ?? "—"} · BTC ${fmtPct(d.regime.btcChange24h)}`}
         />
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+        {(
+          [
+            ["F&G", d.regime.fearGreed != null ? String(d.regime.fearGreed) : "—"],
+            ["BTC fund", d.regime.btcFundingPct != null ? `${d.regime.btcFundingPct.toFixed(3)}%` : "—"],
+            ["DXY", d.regime.dxy != null ? `${d.regime.dxy.toFixed(1)} ${fmtPct(d.regime.dxyChangePct)}` : "—"],
+            ["SPX", fmtPct(d.regime.spxChangePct)],
+            ["Mempool", d.regime.mempoolFastSatVb != null ? `${d.regime.mempoolFastSatVb} sat/vB` : "—"],
+            ["DeFi TVL", fmtUsd(d.regime.defiTvlUsd)],
+          ] as const
+        ).map(([k, v]) => (
+          <div key={k} className="rounded-lg border border-border bg-card px-3 py-2">
+            <p className="text-[11px] text-muted-foreground">{k}</p>
+            <p className="font-mono text-xs tabular">{v}</p>
+          </div>
+        ))}
       </div>
 
       <div className="mt-6 grid gap-4 lg:grid-cols-[1.4fr_0.8fr]">

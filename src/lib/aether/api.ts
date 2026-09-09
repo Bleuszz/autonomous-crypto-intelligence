@@ -16,7 +16,6 @@ import {
   placeManualPaperTrade,
   runBacktestJob,
   runTokenResearch,
-  setKillSwitch,
 } from "./ingest";
 
 export const fetchOverview = createServerFn({ method: "GET" }).handler(async () => {
@@ -84,13 +83,6 @@ export const postBacktest = createServerFn({ method: "POST" })
 export const fetchBacktests = createServerFn({ method: "GET" }).handler(async () => {
   return listBacktests();
 });
-
-export const postKillSwitch = createServerFn({ method: "POST" })
-  .validator((input: { on: boolean }) => input)
-  .handler(async ({ data }) => {
-    await setKillSwitch(data.on);
-    return { ok: true, on: data.on };
-  });
 
 export const postPaperTrade = createServerFn({ method: "POST" })
   .validator((input: { assetId: string; side: "buy" | "sell"; notionalUsd: number }) => input)

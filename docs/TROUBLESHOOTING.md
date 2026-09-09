@@ -4,8 +4,7 @@
 | --- | --- |
 | Empty scanner | First ingest still running or CoinGecko 429 |
 | STALE news only | RSS feed lagged; check source health |
-| No paper fills | Confidence/liquidity/rug gates; this is normal |
-| Kill switch stuck | Toggle on System; `KILL_SWITCH` env overrides on |
+| No paper fills | Confidence/liquidity/rug gates, or mixed regime with no dip/momentum setup. Marks must be fresh (venue overlay stamps observedAt). |
 | Research error | `XAI_API_KEY` missing or quota |
 | X empty | No bearer token / unpaid plan |
 | Backtest empty | Kraken unreachable |

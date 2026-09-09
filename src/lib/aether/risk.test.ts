@@ -21,19 +21,18 @@ describe("rug assessment", () => {
 });
 
 describe("order risk", () => {
-  it("blocks kill switch and daily loss", () => {
+  it("blocks daily loss circuit breaker", () => {
     const r = checkOrderRisk({
-      killSwitch: true,
       equity: 10000,
       cash: 10000,
       requestedNotional: 100,
-      dayPnlUsd: 0,
+      dayPnlUsd: -900,
       tokenNotionalAfter: 100,
       chainNotionalAfter: 100,
       liquidityUsd: 1_000_000,
       slippageBps: 10,
       limits: {
-        maxPositionPct: 0.1,
+        maxPositionPct: 0.12,
         maxDailyLossPct: 0.08,
         maxTokenConcentrationPct: 0.25,
         maxChainExposurePct: 0.5,
@@ -42,5 +41,6 @@ describe("order risk", () => {
       },
     });
     assert.equal(r.ok, false);
+    assert.ok(r.reasons.some((x) => /daily loss/i.test(x)));
   });
 });

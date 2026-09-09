@@ -1,3 +1,4 @@
+import { newsSideForTitle } from "./engine";
 import type { RankedOpportunity, NewsDTO, PolymarketDTO, SocialDTO } from "./types";
 
 export type GeneratedSignal = {
@@ -23,6 +24,7 @@ export function generateSignals(opts: {
   polymarket: PolymarketDTO[];
   trendingSymbols: Set<string>;
   walletHits: Map<string, number>;
+  btcChange24h?: number | null;
 }): GeneratedSignal[] {
   const out: GeneratedSignal[] = [];
   const bySymbol = new Map<string, RankedOpportunity[]>();
@@ -36,21 +38,24 @@ export function generateSignals(opts: {
   for (const r of opts.ranked) {
     const a = r.asset;
     const px = a.priceUsd;
-    const liq = numOr(a.liquidityUsd);
+    const liq = numOr(a.liquidityUsd) || numOr(a.volume24hUsd);
     const mom = r.components.momentum;
     const volA = r.components.volumeAnomaly;
+    const h1 = numOr(a.change1hPct);
+    const d24 = numOr(a.change24hPct);
 
     if (
       a.kind !== "stable" &&
       liq >= 75_000 &&
       r.rugRisk < 0.55 &&
-      mom >= 0.58 &&
-      volA >= 0.35 &&
-      r.confidence >= 0.58
+      mom >= 0.52 &&
+      volA >= 0.28 &&
+      r.confidence >= 0.52 &&
+      d24 < 35
     ) {
       out.push({
         strategyId: "momentum_v1",
-        strategyVersion: "1.0.0",
+        strategyVersion: "1.1.0",
         assetId: a.id,
         side: "buy",
         confidence: r.confidence,
@@ -59,9 +64,23 @@ export function generateSignals(opts: {
         expectedHorizon: "hours",
         explanation: [
           `Momentum ${mom.toFixed(2)} with volume anomaly ${volA.toFixed(2)}`,
-          `Liquidity ${Math.round(liq).toLocaleString()} USD`,
+          `Liquidity/volume ${Math.round(liq).toLocaleString()} USD`,
           ...r.reasons.slice(0, 3),
         ],
+      });
+    }
+
+    if (a.kind === "major" && d24 <= -1.8 && d24 >= -12 && h1 >= 0.1 && r.confidence >= 0.45) {
+      out.push({
+        strategyId: "major_dip_v2",
+        strategyVersion: "2.0.0",
+        assetId: a.id,
+        side: "buy",
+        confidence: Math.min(0.76, 0.5 + Math.min(0.15, -d24 / 60)),
+        opportunityScore: r.score,
+        entryMid: px,
+        expectedHorizon: "hours",
+        explanation: [`24h ${d24.toFixed(2)}% with 1h ${h1.toFixed(2)}% turn`, "Dip-buy on a listed major — not a bottom call"],
       });
     }
 
@@ -72,7 +91,7 @@ export function generateSignals(opts: {
       ageH < 72 &&
       liq >= 40_000 &&
       r.rugRisk < 0.45 &&
-      r.confidence >= 0.6
+      r.confidence >= 0.58
     ) {
       out.push({
         strategyId: "discovery_liquidity_v1",
@@ -125,20 +144,36 @@ export function generateSignals(opts: {
         ],
       });
     }
+
+    if (a.kind !== "stable" && h1 <= -2.4 && d24 > 6 && r.confidence >= 0.5) {
+      out.push({
+        strategyId: "momentum_fade_v2",
+        strategyVersion: "2.0.0",
+        assetId: a.id,
+        side: "sell",
+        confidence: 0.58,
+        opportunityScore: r.score,
+        entryMid: px,
+        expectedHorizon: "hours",
+        explanation: [`1h ${h1.toFixed(2)}% after 24h ${d24.toFixed(2)}% — fade, not a short inventory book`],
+      });
+    }
   }
 
   for (const n of opts.news) {
     if (n.freshness !== "NEW" && n.freshness !== "RECENT") continue;
+    const sideHint = newsSideForTitle(n.title);
     for (const ent of n.entities) {
       const matches = bySymbol.get(ent) ?? [];
       for (const r of matches.slice(0, 2)) {
-        if (numOr(r.asset.liquidityUsd) < 80_000) continue;
+        if (numOr(r.asset.liquidityUsd) < 80_000 && numOr(r.asset.volume24hUsd) < 2_000_000) continue;
+        const side = sideHint ?? "buy";
         const conf = Math.min(0.8, 0.5 + n.sourceReliability * 0.2 + (n.freshness === "NEW" ? 0.12 : 0.04));
         out.push({
           strategyId: "news_reaction_v1",
-          strategyVersion: "1.0.0",
+          strategyVersion: "1.1.0",
           assetId: r.asset.id,
-          side: "buy",
+          side,
           confidence: conf,
           opportunityScore: r.score,
           entryMid: r.asset.priceUsd,
@@ -146,6 +181,7 @@ export function generateSignals(opts: {
           explanation: [
             `${n.freshness} ${n.source}: ${n.title}`,
             `Entity ${ent} linked by ticker/name match — not a confirmed causal claim`,
+            side === "sell" ? "Headline tone treated as bearish — still not ground truth" : "Headline tone treated as catalyst",
           ],
         });
       }
@@ -163,7 +199,7 @@ export function generateSignals(opts: {
         strategyId: "polymarket_macro_v1",
         strategyVersion: "1.0.0",
         assetId: target.asset.id,
-        side: "buy",
+        side: (m.probabilityChange24h ?? 0) < 0 ? "sell" : "buy",
         confidence: 0.55,
         opportunityScore: target.score,
         entryMid: target.asset.priceUsd,
@@ -178,9 +214,9 @@ export function generateSignals(opts: {
 
   const dedup = new Map<string, GeneratedSignal>();
   for (const s of out) {
-    const k = `${s.strategyId}:${s.assetId}`;
+    const k = `${s.strategyId}:${s.assetId}:${s.side}`;
     const prev = dedup.get(k);
     if (!prev || s.confidence > prev.confidence) dedup.set(k, s);
   }
-  return [...dedup.values()].sort((a, b) => b.confidence - a.confidence).slice(0, 40);
+  return [...dedup.values()].sort((a, b) => b.confidence - a.confidence).slice(0, 48);
 }
