@@ -65,6 +65,37 @@ function SystemPage() {
       </section>
 
       <section className="mb-6 rounded-xl border border-border bg-card p-5">
+        <h2 className="text-sm font-medium">X API budget</h2>
+        <p className="mt-1 text-sm text-muted-foreground">
+          Capped so a $5 credit lasts about a week. Live trading is not using this key.
+        </p>
+        <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+          <div className="flex justify-between gap-3">
+            <dt className="text-muted-foreground">Configured</dt>
+            <dd>{s.xUsage?.configured ? "yes" : "no"}</dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt className="text-muted-foreground">Today</dt>
+            <dd className="font-mono">
+              {s.xUsage.callsToday}/{s.xUsage.dailyCap}
+            </dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt className="text-muted-foreground">This week</dt>
+            <dd className="font-mono">
+              {s.xUsage.callsWeek}/{s.xUsage.weeklyCap} · {s.xUsage.tweetsPulledWeek} tweets
+            </dd>
+          </div>
+          <div className="flex justify-between gap-3">
+            <dt className="text-muted-foreground">Next window</dt>
+            <dd className="font-mono text-xs">{s.xUsage.nextCallAt ? s.xUsage.nextCallAt.replace("T", " ").slice(0, 19) : "—"}</dd>
+          </div>
+        </dl>
+        {s.xUsage.lastError ? <p className="mt-2 text-xs text-muted-foreground">{s.xUsage.lastError}</p> : null}
+        <p className="mt-2 text-[11px] text-muted-foreground">Market poll every {Math.round(s.pollMs / 1000)}s (free sources). X is not on that cadence.</p>
+      </section>
+
+      <section className="mb-6 rounded-xl border border-border bg-card p-5">
         <h2 className="text-sm font-medium">Last ingest</h2>
         <p className="mt-2 font-mono text-xs text-muted-foreground">
           {s.lastIngest.status} · {s.lastIngest.durationMs ?? "—"} ms · assets {s.lastIngest.assetsUpserted ?? "—"} · signals {s.lastIngest.signalsCreated ?? "—"}

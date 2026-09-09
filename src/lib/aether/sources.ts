@@ -1,4 +1,5 @@
 import { CHAIN_TO_GOPLUS, GT_NETWORKS, GT_TO_CHAIN, SOURCE_RELIABILITY } from "./config";
+import { X_MAX_RESULTS, X_SEARCH_QUERY } from "./xbudget";
 import { fetchJson, fetchText } from "./http";
 import { num, num0 } from "./math";
 import { iso, newsFreshness, nowIso, parseTime } from "./time";
@@ -730,31 +731,56 @@ export function extractEntities(text: string, symbols: string[]): string[] {
   return [...found];
 }
 
-export async function fetchXRecent(query: string, bearer: string): Promise<{ posts: NormalizedSocial[]; health: HealthPing }> {
-  const url = `https://api.x.com/2/tweets/search/recent?query=${encodeURIComponent(query)}&max_results=20&tweet.fields=created_at,public_metrics,lang,author_id`;
-  const res = await fetchJson<{ data?: Array<Record<string, unknown>>; title?: string; detail?: string }>(url, {
+export async function fetchXRecent(query: string, bearer: string): Promise<{ posts: NormalizedSocial[]; health: HealthPing; status: number }> {
+  const params = new URLSearchParams({
+    query,
+    max_results: String(X_MAX_RESULTS),
+    "tweet.fields": "created_at,public_metrics,lang,author_id",
+    expansions: "author_id",
+    "user.fields": "username",
+  });
+  const url = `https://api.twitter.com/2/tweets/search/recent?${params.toString()}`;
+  const res = await fetchJson<{
+    data?: Array<Record<string, unknown>>;
+    includes?: { users?: Array<{ id?: string; username?: string }> };
+    title?: string;
+    detail?: string;
+  }>(url, {
     retries: 0,
+    timeoutMs: 12_000,
     headers: { Authorization: `Bearer ${bearer}` },
   });
   const ingestedAt = nowIso();
-  const posts: NormalizedSocial[] = (res.data?.data ?? []).map((t) => ({
-    id: `x:${String(t.id)}`,
-    platform: "x",
-    author: typeof t.author_id === "string" ? t.author_id : null,
-    url: t.id ? `https://x.com/i/web/status/${t.id}` : null,
-    body: String(t.text ?? ""),
-    engagement: num((t.public_metrics as { like_count?: unknown } | undefined)?.like_count),
-    publishedAt: iso(t.created_at),
-    ingestedAt,
-    sourceReliability: SOURCE_RELIABILITY.x,
-  }));
+  const users = new Map(
+    (res.data?.includes?.users ?? []).map((u) => [String(u.id ?? ""), String(u.username ?? "")]),
+  );
+  const posts: NormalizedSocial[] = (res.data?.data ?? []).map((t) => {
+    const authorId = typeof t.author_id === "string" ? t.author_id : null;
+    const handle = authorId ? users.get(authorId) : null;
+    return {
+      id: `x:${String(t.id)}`,
+      platform: "x",
+      author: handle ? `@${handle}` : authorId,
+      url: t.id ? `https://x.com/i/web/status/${t.id}` : null,
+      body: String(t.text ?? ""),
+      engagement: num((t.public_metrics as { like_count?: unknown } | undefined)?.like_count),
+      publishedAt: iso(t.created_at),
+      ingestedAt,
+      sourceReliability: SOURCE_RELIABILITY.x,
+    };
+  });
+  const err = res.ok ? null : res.error || res.data?.detail || res.data?.title || `http ${res.status}`;
   return {
     posts,
+    status: res.status,
     health: {
       source: "x",
       status: res.ok ? "up" : "down",
       latencyMs: res.latencyMs,
-      error: res.ok ? null : res.error,
+      error: err,
     },
   };
 }
+
+export { X_SEARCH_QUERY };
+

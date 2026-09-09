@@ -15,6 +15,9 @@ Live execution is compiled out. `TRADING_MODE=PAPER` is the only path that can p
 - Paper-trades with latency, impact, fees and gas
 - Walk-forward backtests on Kraken daily candles (no look-ahead)
 - Optional Grok research reports split into FACT / INFERENCE / UNCERTAINTY / SPECULATION
+- Official X recent-search on a hard **$5/week** budget (8 calls/day, 3 hours apart)
+
+X API keys live in gitignored `secrets/runtime.env`. The spend ledger is `secrets/x-budget.json` so a restart cannot reset the cap.
 
 ## Trading mode
 

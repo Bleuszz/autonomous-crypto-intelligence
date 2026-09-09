@@ -20,7 +20,7 @@
  * `process.env`, which is why the merge has to happen before Vite starts.
  */
 import { spawn } from "node:child_process";
-import { readFileSync, realpathSync } from "node:fs";
+import { readdirSync, readFileSync, realpathSync } from "node:fs";
 import { constants as osConstants } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -63,6 +63,45 @@ export function readAppEnv(root) {
 /** File values under the process environment: an explicit override wins. */
 export function mergeAppEnv(appEnv, processEnv) {
   return { ...appEnv, ...processEnv };
+}
+
+/**
+ * Gitignored KEY=VALUE files under secrets/. Never VITE_ (those would leak
+ * to the browser). Existing process.env wins so CI/deploy is untouched.
+ */
+export function readLocalSecrets(root) {
+  const env = {};
+  let files = [];
+  try {
+    files = readdirSync(join(root, "secrets")).filter((f) => f.endsWith(".env"));
+  } catch {
+    return env;
+  }
+  for (const file of files) {
+    let text = "";
+    try {
+      text = readFileSync(join(root, "secrets", file), "utf8");
+    } catch {
+      continue;
+    }
+    for (const line of text.split("\n")) {
+      const t = line.trim();
+      if (!t || t.startsWith("#")) continue;
+      const eq = t.indexOf("=");
+      if (eq <= 0) continue;
+      const key = t.slice(0, eq).trim();
+      if (!key || key.startsWith("VITE_")) continue;
+      let val = t.slice(eq + 1).trim();
+      if (
+        (val.startsWith('"') && val.endsWith('"')) ||
+        (val.startsWith("'") && val.endsWith("'"))
+      ) {
+        val = val.slice(1, -1);
+      }
+      env[key] = val;
+    }
+  }
+  return env;
 }
 
 /**
@@ -110,7 +149,10 @@ function main(argv) {
     console.error("usage: node scripts/with-app-env.mjs <command> [args…]");
     process.exit(2);
   }
-  const env = mergeAppEnv(readAppEnv(projectRoot()), process.env);
+  const env = mergeAppEnv(
+    { ...readLocalSecrets(projectRoot()), ...readAppEnv(projectRoot()) },
+    process.env,
+  );
   const child = spawn(command, args, { stdio: "inherit", env });
   // The dev server is long-running and is stopped by signalling this wrapper.
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {

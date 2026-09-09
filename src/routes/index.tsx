@@ -71,6 +71,13 @@ function Home() {
         <Badge variant="outline">
           {d.scanCapacity.majors} majors · {d.scanCapacity.dex} dex · {d.scanCapacity.ranked} ranked
         </Badge>
+        {d.xUsage ? (
+          <Badge variant={d.xUsage.configured ? "outline" : "warn"}>
+            {d.xUsage.configured
+              ? `X ${d.xUsage.callsToday}/${d.xUsage.dailyCap} today`
+              : "X off"}
+          </Badge>
+        ) : null}
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

@@ -35,8 +35,14 @@ export const PAPER_FEES = {
   latencyMsMax: 9000,
 } as const;
 
-export const INGEST_TTL_MS = 55_000;
-export const PRICE_STALE_MS = 120_000;
+/** Request-path cache. Scheduler polls independently. */
+export const INGEST_TTL_MS = 150_000;
+/** Background desk poll — public providers only; X is gated separately. */
+export const INGEST_POLL_MS = 180_000;
+export const PRICE_STALE_MS = 180_000;
+/** Marks older than this cannot open a paper fill. */
+export const PRICE_TRADE_STALE_MS = 180_000;
+export const RANK_STALE_MS = 8 * 60_000;
 export const NEWS_NEW_MS = 30 * 60_000;
 export const NEWS_RECENT_MS = 6 * 60 * 60_000;
 export const HTTP_TIMEOUT_MS = 12_000;

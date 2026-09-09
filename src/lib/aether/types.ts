@@ -293,6 +293,19 @@ export type ResearchDTO = {
   createdAt: string;
 };
 
+export type XUsageDTO = {
+  configured: boolean;
+  callsToday: number;
+  dailyCap: number;
+  callsWeek: number;
+  weeklyCap: number;
+  lastCallAt: string | null;
+  lastSuccessAt: string | null;
+  nextCallAt: string | null;
+  lastError: string | null;
+  tweetsPulledWeek: number;
+};
+
 export type OverviewDTO = {
   generatedAt: string;
   tradingMode: "PAPER" | "LIVE";
@@ -314,6 +327,7 @@ export type OverviewDTO = {
     dex: number;
     ranked: number;
   };
+  xUsage: XUsageDTO;
 };
 
 export type SystemDTO = {
@@ -333,4 +347,6 @@ export type SystemDTO = {
   dbSource: string;
   paperStartingEquity: number;
   alerts: { id: string; kind: string; severity: string; title: string; createdAt: string }[];
+  xUsage: XUsageDTO;
+  pollMs: number;
 };

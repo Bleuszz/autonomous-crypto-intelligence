@@ -14,13 +14,22 @@ function SocialPage() {
       <PageHeader
         kicker="Context"
         title="Social"
-        description="X firehose is optional and off until an official bearer token is provided. Until then this view is a proxy: DexScreener profiles, trending searches, and linked entities. Posts are not treated as true."
+        description="Official X recent-search is on a hard budget (~$5/week): one compact query, 10 posts, at most eight calls a day and three hours between them. Posts are not treated as true."
       />
       {q.isLoading ? <Skeleton className="h-80 rounded-xl" /> : null}
       {q.error ? <ErrorState message={q.error instanceof Error ? q.error.message : "Failed"} /> : null}
-      {q.data && !q.data.xConfigured ? (
+      {q.data?.xUsage ? (
         <p className="mb-4 rounded-xl border border-border bg-card px-4 py-3 text-sm text-muted-foreground">
-          Official X recent-search is not configured. Add X_BEARER_TOKEN to enable it. Access is a paid X API plan.
+          {q.data.xUsage.configured ? (
+            <>
+              X live · {q.data.xUsage.callsToday}/{q.data.xUsage.dailyCap} calls today · {q.data.xUsage.callsWeek}/
+              {q.data.xUsage.weeklyCap} this week
+              {q.data.xUsage.nextCallAt ? ` · next window ${q.data.xUsage.nextCallAt.replace("T", " ").slice(11, 19)} UTC` : ""}
+              {q.data.xUsage.lastError ? ` · ${q.data.xUsage.lastError}` : ""}
+            </>
+          ) : (
+            <>Official X recent-search is not configured.</>
+          )}
         </p>
       ) : null}
       <div className="space-y-3">

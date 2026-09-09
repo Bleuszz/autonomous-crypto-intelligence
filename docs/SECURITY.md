@@ -8,4 +8,4 @@
 - Kill switch blocks new paper orders immediately.
 - Live submission cannot be armed by the presence of an API key.
 
-If a secret appears in a log, rotate it.
+If a secret appears in a log, chat, or git history, rotate it immediately. X keys pasted into chat should be rotated at developer.x.com after this desk is confirmed working.

@@ -120,7 +120,7 @@ export function generateSignals(opts: {
         entryMid: px,
         expectedHorizon: "hours",
         explanation: [
-          "Appears on trending-search / mention proxy (not the X firehose)",
+          "Appears on trending-search / mention proxy — not treated as the X firehose, and not auto-traded",
           "Social posts are not treated as true",
         ],
       });

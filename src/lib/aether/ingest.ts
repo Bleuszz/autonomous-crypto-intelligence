@@ -1,8 +1,10 @@
 import { getSql, dbSource, type Sql } from "@/lib/db";
 import {
   DEFAULT_PORTFOLIO_ID,
+  INGEST_POLL_MS,
   INGEST_TTL_MS,
   PAPER_FEES,
+  PRICE_TRADE_STALE_MS,
   RISK_LIMITS,
   SCORE_WEIGHTS,
   envFlag,
@@ -30,6 +32,7 @@ import {
   fetchXRecent,
   type HealthPing,
   type NormalizedAsset,
+  type NormalizedSocial,
 } from "./sources";
 import { ageMs, formatAge, newsFreshness, nowIso } from "./time";
 import { num0 } from "./math";
@@ -48,9 +51,23 @@ import type {
   SystemDTO,
   WalletDTO,
   WalletTxDTO,
+  XUsageDTO,
 } from "./types";
 import { runMomentumBacktest, walkForwardSplit, type Candle } from "./backtest";
 import { runResearch } from "./research";
+import { loadRuntimeSecrets } from "./secrets";
+import { startDeskScheduler } from "./scheduler";
+import {
+  X_DAILY_CAP,
+  X_SEARCH_QUERY,
+  X_WEEKLY_CAP,
+  applyXCall,
+  emptyXBudget,
+  nextXCallAt,
+  rollBudget,
+  shouldCallX,
+  type XBudgetState,
+} from "./xbudget";
 
 type Cache = {
   overview: OverviewDTO | null;
@@ -61,6 +78,112 @@ type Cache = {
 const g = globalThis as typeof globalThis & { __aetherCache?: Cache };
 g.__aetherCache ??= { overview: null, lastIngestAt: 0, ingesting: null };
 const cache = g.__aetherCache;
+
+function xConfigured(): boolean {
+  return Boolean(envStr("X_BEARER_TOKEN"));
+}
+
+function xUsageDto(budget: XBudgetState): XUsageDTO {
+  const next = nextXCallAt(budget);
+  return {
+    configured: xConfigured(),
+    callsToday: budget.callsToday,
+    dailyCap: X_DAILY_CAP,
+    callsWeek: budget.callsWeek,
+    weeklyCap: X_WEEKLY_CAP,
+    lastCallAt: budget.lastCallAt ? new Date(budget.lastCallAt).toISOString() : null,
+    lastSuccessAt: budget.lastSuccessAt ? new Date(budget.lastSuccessAt).toISOString() : null,
+    nextCallAt: next ? new Date(next).toISOString() : null,
+    lastError: budget.lastError,
+    tweetsPulledWeek: budget.tweetsPulled,
+  };
+}
+
+async function loadXBudget(sql: Sql): Promise<XBudgetState> {
+  try {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const file = path.join(process.cwd(), "secrets/x-budget.json");
+    if (fs.existsSync(file)) {
+      const parsed = JSON.parse(fs.readFileSync(file, "utf8")) as XBudgetState;
+      if (parsed && typeof parsed === "object") return rollBudget(parsed);
+    }
+  } catch {
+    /* fall through to db */
+  }
+  const rows = await sql.query<{ value: unknown }>("select value from system_config where key = $1", ["x_api_budget"]);
+  const v = rows[0]?.value;
+  if (v && typeof v === "object" && !Array.isArray(v)) return rollBudget(v as XBudgetState);
+  return emptyXBudget();
+}
+
+async function saveXBudget(sql: Sql, state: XBudgetState): Promise<void> {
+  await sql.query(
+    `insert into system_config (key, value, updated_at) values ('x_api_budget', $1::jsonb, now())
+     on conflict (key) do update set value = excluded.value, updated_at = now()`,
+    [JSON.stringify(state)],
+  );
+  try {
+    const fs = await import("node:fs");
+    const path = await import("node:path");
+    const dir = path.join(process.cwd(), "secrets");
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "x-budget.json"), JSON.stringify(state, null, 2));
+  } catch {
+    /* disk persist is best-effort */
+  }
+}
+
+async function maybeFetchX(sql: Sql): Promise<{
+  posts: NormalizedSocial[];
+  health: HealthPing;
+  budget: XBudgetState;
+}> {
+  const bearer = envStr("X_BEARER_TOKEN");
+  let budget = await loadXBudget(sql);
+  if (!bearer) {
+    return {
+      posts: [],
+      health: { source: "x", status: "down", latencyMs: 0, error: "X_BEARER_TOKEN unset" },
+      budget,
+    };
+  }
+  const decision = shouldCallX(budget);
+  if (!decision.ok) {
+    const recent = budget.lastSuccessAt && Date.now() - budget.lastSuccessAt < 4 * 60 * 60 * 1000;
+    return {
+      posts: [],
+      health: {
+        source: "x",
+        status: recent ? "up" : "degraded",
+        latencyMs: 0,
+        error: `throttled: ${decision.reason}`,
+      },
+      budget,
+    };
+  }
+  const x = await fetchXRecent(X_SEARCH_QUERY, bearer);
+  budget = applyXCall(budget, {
+    ok: x.health.status === "up",
+    status: x.status,
+    error: x.health.error,
+    tweets: x.posts.length,
+  });
+  await saveXBudget(sql, budget);
+  return { posts: x.posts, health: x.health, budget };
+}
+
+function isQualityPaperEntry(r: RankedOpportunity, s: SignalDTO): boolean {
+  if (s.strategyId === "social_proxy_v1") return false;
+  if (s.confidence < 0.64) return false;
+  if ((r.asset.dataAgeMs ?? Number.POSITIVE_INFINITY) > PRICE_TRADE_STALE_MS) return false;
+  if (!(r.asset.priceUsd && r.asset.priceUsd > 0)) return false;
+  if (r.rugRisk >= 0.45) return false;
+  if (Math.abs(r.asset.change24hPct ?? 0) > 80) return false;
+  const liq = r.asset.liquidityUsd ?? 0;
+  if (r.asset.kind === "dex") return liq >= 250_000;
+  return liq >= 400_000;
+}
 
 const STOP_WORDS = new Set([
   "THE", "AND", "FOR", "ARE", "YOU", "NEW", "ALL", "BUT", "NOT", "ANY", "CAN", "OUR", "OUT",
@@ -281,13 +404,16 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
 
   if (!kill) {
     const candidates = signals
-      .filter((s) => s.side === "buy" && s.status === "open" && s.confidence >= 0.62 && !held.has(s.assetId))
-      .slice(0, 4);
+      .filter((s) => s.side === "buy" && s.status === "open" && !held.has(s.assetId))
+      .filter((s) => {
+        const r = ranked.find((x) => x.asset.id === s.assetId);
+        return r ? isQualityPaperEntry(r, s) : false;
+      })
+      .slice(0, 2);
     for (const s of candidates) {
       const r = ranked.find((x) => x.asset.id === s.assetId);
       if (!r || !r.asset.priceUsd) continue;
-      if (r.rugRisk >= 0.5) continue;
-      if ((r.asset.liquidityUsd ?? 0) < 75_000) continue;
+      if (!isQualityPaperEntry(r, s)) continue;
       const size = positionSizeUsd(
         equity,
         s.confidence,
@@ -508,13 +634,13 @@ function parseJsonArray(v: unknown): string[] {
 }
 
 async function ingestOnce(): Promise<void> {
+  await loadRuntimeSecrets();
   const sql = await getSql();
   const runId = rid();
   const t0 = Date.now();
   await sql.query(`insert into ingest_runs (id, started_at, status) values ($1, now(), 'running')`, [runId]);
   const errors: string[] = [];
   try {
-    const xBearer = envStr("X_BEARER_TOKEN");
     const [cg, global, trending, ds, pools, news, pm, fng, cb, xPosts] = await Promise.all([
       fetchCoinGeckoMarkets(100),
       fetchCoinGeckoGlobal(),
@@ -525,12 +651,7 @@ async function ingestOnce(): Promise<void> {
       fetchPolymarket(),
       fetchFearGreed(),
       fetchCoinbaseSpot(),
-      xBearer
-        ? fetchXRecent("(crypto OR bitcoin OR ethereum) -is:retweet lang:en", xBearer)
-        : Promise.resolve({
-            posts: [],
-            health: { source: "x", status: "down" as const, latencyMs: 0, error: "X_BEARER_TOKEN unset" },
-          }),
+      maybeFetchX(sql),
     ]);
 
     const health: HealthPing[] = [
@@ -562,6 +683,14 @@ async function ingestOnce(): Promise<void> {
     if (eth && cb.eth) eth.priceUsd = cb.eth;
     const sol = merged.get("cg:solana");
     if (sol && cb.sol) sol.priceUsd = cb.sol;
+
+    for (const [id, a] of [...merged.entries()]) {
+      if (!(a.priceUsd && a.priceUsd > 0) || !a.observedAt) {
+        merged.delete(id);
+        continue;
+      }
+      if (a.kind === "dex" && !a.contractAddress) merged.delete(id);
+    }
 
     await upsertAssets(sql, [...merged.values()]);
 
@@ -888,6 +1017,7 @@ async function ingestOnce(): Promise<void> {
       ingestStatus: "ok",
       assetCount: merged.size,
       scanCapacity: { majors: cg.assets.length, dex: ds.assets.length + pools.assets.length, ranked: ranked.length },
+      xUsage: xUsageDto(xPosts.budget),
     };
     cache.lastIngestAt = Date.now();
     await sql.query(
@@ -906,6 +1036,10 @@ async function ingestOnce(): Promise<void> {
 }
 
 export async function ensureIngested(force = false): Promise<OverviewDTO> {
+  if (cache.overview && !cache.overview.xUsage) {
+    cache.overview = null;
+    cache.lastIngestAt = 0;
+  }
   const fresh = Boolean(cache.overview && Date.now() - cache.lastIngestAt < INGEST_TTL_MS);
   if (!force && fresh && cache.overview) return cache.overview;
 
@@ -935,6 +1069,14 @@ export async function ensureIngested(force = false): Promise<OverviewDTO> {
   return cache.overview;
 }
 
+if (typeof window === "undefined") {
+  startDeskScheduler(() => {
+    void ensureIngested(false).catch((err) => {
+      console.error("[aether] scheduled ingest failed:", err instanceof Error ? err.message : err);
+    });
+  });
+}
+
 export async function getOverview(): Promise<OverviewDTO> {
   return ensureIngested(false);
 }
@@ -950,9 +1092,9 @@ export async function getScanner(): Promise<AssetRow[]> {
 export async function getNews(): Promise<NewsDTO[]> {
   return (await ensureIngested(false)).news;
 }
-export async function getSocial(): Promise<{ posts: SocialDTO[]; xConfigured: boolean }> {
+export async function getSocial(): Promise<{ posts: SocialDTO[]; xConfigured: boolean; xUsage: XUsageDTO }> {
   const o = await ensureIngested(false);
-  return { posts: o.social, xConfigured: Boolean(envStr("X_BEARER_TOKEN")) };
+  return { posts: o.social, xConfigured: o.xUsage.configured, xUsage: o.xUsage };
 }
 export async function getPolymarket(): Promise<PolymarketDTO[]> {
   return (await ensureIngested(false)).polymarket;
@@ -1020,6 +1162,8 @@ export async function getSystem(): Promise<SystemDTO> {
     alerts: alerts.map((a) => ({
       id: String(a.id), kind: String(a.kind), severity: String(a.severity), title: String(a.title), createdAt: String(a.created_at),
     })),
+    xUsage: o.xUsage,
+    pollMs: INGEST_POLL_MS,
   };
 }
 export async function getStrategies() {
@@ -1138,6 +1282,9 @@ export async function placeManualPaperTrade(input: { assetId: string; side: "buy
   if (await loadKill(sql)) return { ok: false as const, error: "Kill switch is engaged" };
   const asset = o.opportunities.find((x) => x.asset.id === input.assetId)?.asset ?? (await getToken(input.assetId))?.asset;
   if (!asset?.priceUsd) return { ok: false as const, error: "No mark price" };
+  if ((asset.dataAgeMs ?? Number.POSITIVE_INFINITY) > PRICE_TRADE_STALE_MS) {
+    return { ok: false as const, error: "Mark is stale — wait for the next live ingest" };
+  }
   const fill = simulateFill({
     side: input.side, mid: asset.priceUsd, notionalUsd: input.notionalUsd,
     liquidityUsd: asset.liquidityUsd ?? 0, volatilityPct: Math.abs(asset.change24hPct ?? 8),
