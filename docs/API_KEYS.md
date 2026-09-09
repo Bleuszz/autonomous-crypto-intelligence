@@ -29,7 +29,9 @@ Official recent-search is **paid**. This desk is tuned so a **$5 credit lasts ab
 - 429 / 401 / 402 / 403 → **6 hour backoff**
 - Refresh on the desk does **not** bypass the cap
 
-Store as `X_BEARER_TOKEN` (plus optional `X_API_KEY` / `X_API_SECRET`). Percent-encoded bearers are decoded automatically.
+Store as `X_BEARER_TOKEN` (plus optional `X_API_KEY` / `X_API_SECRET`) in `secrets/runtime.env`.
+
+**Paste the bearer exactly as X Developer Portal shows it.** If it contains `%2F` / `%2B` / `%3D`, leave those characters in place. URI-decoding the token produces HTTP 401.
 
 If these keys were pasted into a chat, rotate them at developer.x.com when you can.
 

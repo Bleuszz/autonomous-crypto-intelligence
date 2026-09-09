@@ -4,6 +4,8 @@ Autonomous cryptocurrency intelligence, research, and **paper-trading** platform
 
 Live execution is compiled out. `TRADING_MODE=PAPER` is the only path that can place orders. A viral terminal screenshot is treated as a hypothesis, not evidence.
 
+Private repo: [github.com/Bleuszz/autonomous-crypto-intelligence](https://github.com/Bleuszz/autonomous-crypto-intelligence)
+
 ## What it does
 
 - Discovers listed majors (CoinGecko) and newly liquid DEX pools (DexScreener, GeckoTerminal)
@@ -25,6 +27,18 @@ X API keys live in gitignored `secrets/runtime.env`. The spend ledger is `secret
 | --- | --- |
 | PAPER | Default, enforced |
 | LIVE | Disabled. See [docs/TRADING.md](docs/TRADING.md) |
+
+## Run locally
+
+See [docs/SETUP.md](docs/SETUP.md). Short path:
+
+```bash
+git clone git@github.com:Bleuszz/autonomous-crypto-intelligence.git
+cd autonomous-crypto-intelligence
+npm install
+# optional: copy X keys into gitignored secrets/runtime.env (paste bearer as-is)
+npm run dev
+```
 
 ## Docs
 
