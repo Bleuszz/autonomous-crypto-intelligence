@@ -717,7 +717,8 @@ export function extractEntities(text: string, symbols: string[]): string[] {
   const upper = text.toUpperCase();
   for (const s of symbols) {
     if (s.length < 3) continue;
-    const re = new RegExp(`(?:^|[^A-Z0-9])\\$?${s}(?:[^A-Z0-9]|$)`);
+    const safe = s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`(?:^|[^A-Z0-9])\\$?${safe}(?:[^A-Z0-9]|$)`);
     if (re.test(upper)) found.add(s);
   }
   const names: [string, string][] = [

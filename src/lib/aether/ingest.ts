@@ -1133,7 +1133,8 @@ async function ingestOnce(): Promise<void> {
            impact_score = excluded.impact_score,
            confidence = excluded.confidence,
            market_relevance = excluded.market_relevance,
-           updated_at = now()`,
+           observed_at = excluded.observed_at,
+           ingested_at = now()`,
         [e.id, e.source, e.sourceReliability, e.author, e.entityId, e.title, e.url, e.rawText, e.eventType, e.category, JSON.stringify(e.affectedAssets), e.sentiment, e.novelty, e.credibility, e.marketRelevance, e.impactScore, e.confidence, e.historicalContext, JSON.stringify(e.supportingSources), JSON.stringify(e.contradictorySources), e.publishedAt, e.observedAt],
       );
     }

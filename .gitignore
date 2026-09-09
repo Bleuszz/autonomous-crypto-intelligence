@@ -30,5 +30,6 @@ public/og.jpg
 *.sqlite-shm
 *.sqlite-wal
 pglite-debug*
+.pglite-test/
 .project_id
 .node_modules.lock
