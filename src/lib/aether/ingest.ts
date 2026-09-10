@@ -1104,97 +1104,105 @@ async function ingestOnce(): Promise<void> {
     // ---- Event intelligence + Polymarket wallet intelligence ----
     const assetsForEvents = [...merged.values()].map((x) => rowAsset({ ...x, chain_id: x.chainId, contract_address: x.contractAddress, coingecko_id: x.coingeckoId, image_url: x.imageUrl, price_usd: x.priceUsd, market_cap_usd: x.marketCapUsd, fdv_usd: x.fdvUsd, volume_24h_usd: x.volume24hUsd, liquidity_usd: x.liquidityUsd, change_1h_pct: x.change1hPct, change_24h_pct: x.change24hPct, change_7d_pct: x.change7dPct, pair_created_at: x.pairCreatedAt, sparkline_7d: x.sparkline7d, source_reliability: x.sourceReliability, observed_at: x.observedAt }));
     const socialForEvents = socialDto.map((s) => ({ platform: s.platform, author: s.author, body: s.body }));
-    const detectedEvents = detectEvents({ news: newsDto, social: socialForEvents, polymarket: pmDto, assets: assetsForEvents });
-    const detectedEventDtos: DetectedEventDTO[] = detectedEvents.map((e) => ({
-      id: e.id,
-      source: e.source,
-      author: e.author,
-      entityId: e.entityId,
-      title: e.title,
-      url: e.url,
-      eventType: e.eventType,
-      category: e.category,
-      affectedAssets: e.affectedAssets,
-      sentiment: e.sentiment,
-      novelty: e.novelty,
-      credibility: e.credibility,
-      marketRelevance: e.marketRelevance,
-      impactScore: e.impactScore,
-      confidence: e.confidence,
-      historicalContext: e.historicalContext,
-      publishedAt: e.publishedAt,
-      observedAt: e.observedAt,
-    }));
-    for (const e of detectedEvents.slice(0, 20)) {
-      await sql.query(
-        `insert into detected_events (id, source, source_reliability, author, entity_id, title, url, raw_text, event_type, category, affected_assets, sentiment, novelty, credibility, market_relevance, impact_score, confidence, historical_context, supporting_sources, contradictory_sources, published_at, observed_at, ingested_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20::jsonb,$21,$22,now())
-         on conflict (id) do update set
-           impact_score = excluded.impact_score,
-           confidence = excluded.confidence,
-           market_relevance = excluded.market_relevance,
-           observed_at = excluded.observed_at,
-           ingested_at = now()`,
-        [e.id, e.source, e.sourceReliability, e.author, e.entityId, e.title, e.url, e.rawText, e.eventType, e.category, JSON.stringify(e.affectedAssets), e.sentiment, e.novelty, e.credibility, e.marketRelevance, e.impactScore, e.confidence, e.historicalContext, JSON.stringify(e.supportingSources), JSON.stringify(e.contradictorySources), e.publishedAt, e.observedAt],
-      );
-    }
-
-    const { trades: pmTrades, health: pmDataHealth } = await fetchPolymarketGlobalTrades(250);
-    if (pmDataHealth.status !== "down") health.push(pmDataHealth);
-    const walletPerfMap = new Map<string, WalletPerformanceV2>();
-    const walletTradesByWallet = new Map<string, PolymarketTrade[]>();
-    for (const t of pmTrades) {
-      const arr = walletTradesByWallet.get(t.walletId) ?? [];
-      arr.push(t);
-      walletTradesByWallet.set(t.walletId, arr);
-    }
-    const conditionIds = new Set(pmTrades.map((t) => t.conditionId).filter(Boolean));
-    const marketPrices = new Map<string, number>();
-    for (const m of pm.markets) {
-      if (m.id && conditionIds.has(m.id.toLowerCase())) {
-        marketPrices.set(m.id.toLowerCase(), num0(m.probability));
+    let detectedEventDtos: DetectedEventDTO[] = [];
+    let copySignalDtos: CopySignalDTO[] = [];
+    try {
+      const detectedEvents = detectEvents({ news: newsDto, social: socialForEvents, polymarket: pmDto, assets: assetsForEvents });
+      detectedEventDtos = detectedEvents.map((e) => ({
+        id: e.id,
+        source: e.source,
+        author: e.author,
+        entityId: e.entityId,
+        title: e.title,
+        url: e.url,
+        eventType: e.eventType,
+        category: e.category,
+        affectedAssets: e.affectedAssets,
+        sentiment: e.sentiment,
+        novelty: e.novelty,
+        credibility: e.credibility,
+        marketRelevance: e.marketRelevance,
+        impactScore: e.impactScore,
+        confidence: e.confidence,
+        historicalContext: e.historicalContext,
+        publishedAt: e.publishedAt,
+        observedAt: e.observedAt,
+      }));
+      for (const e of detectedEvents.slice(0, 20)) {
+        await sql.query(
+          `insert into detected_events (id, source, source_reliability, author, entity_id, title, url, raw_text, event_type, category, affected_assets, sentiment, novelty, credibility, market_relevance, impact_score, confidence, historical_context, supporting_sources, contradictory_sources, published_at, observed_at, ingested_at)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20::jsonb,$21,$22,now())
+           on conflict (id) do update set
+             impact_score = excluded.impact_score,
+             confidence = excluded.confidence,
+             market_relevance = excluded.market_relevance,
+             observed_at = excluded.observed_at,
+             ingested_at = now()`,
+          [e.id, e.source, e.sourceReliability, e.author, e.entityId, e.title, e.url, e.rawText, e.eventType, e.category, JSON.stringify(e.affectedAssets), e.sentiment, e.novelty, e.credibility, e.marketRelevance, e.impactScore, e.confidence, e.historicalContext, JSON.stringify(e.supportingSources), JSON.stringify(e.contradictorySources), e.publishedAt, e.observedAt],
+        );
       }
-    }
-    for (const [walletId, trades] of walletTradesByWallet.entries()) {
-      if (trades.length < 3) continue; // need some history
-      const perf = evaluateWalletPerformance(trades, marketPrices);
-      walletPerfMap.set(walletId, perf);
-      await sql.query(
-        `insert into polymarket_wallet_trades (id, wallet_id, chain_id, address, tx_hash, market_id, condition_id, event_slug, market_title, outcome, side, size, price, notional_usd, timestamp, observed_at, source)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-         on conflict (id) do nothing`,
-        trades.map((t) => [t.id, walletId, t.chainId, t.address, t.txHash, t.marketId, t.conditionId, t.eventSlug, t.marketTitle, t.outcome, t.side, t.size, t.price, t.notionalUsd, t.timestamp, t.observedAt, t.source]),
-      );
-      await sql.query(
-        `insert into wallet_performance_v2 (wallet_id, address, chain_id, n_trades, n_wins, n_losses, win_rate, avg_return_pct, median_return_pct, avg_win_pct, avg_loss_pct, payoff_ratio, profit_factor, realized_pnl_usd, max_drawdown_pct, avg_holding_hours, recent_n_trades, recent_return_pct, category_performance, quality_score, score_reasons, first_seen, last_seen, updated_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20,$21::jsonb,$22,$23,now())
-         on conflict (wallet_id) do update set
-           n_trades = excluded.n_trades, n_wins = excluded.n_wins, n_losses = excluded.n_losses, win_rate = excluded.win_rate,
-           avg_return_pct = excluded.avg_return_pct, median_return_pct = excluded.median_return_pct, avg_win_pct = excluded.avg_win_pct, avg_loss_pct = excluded.avg_loss_pct,
-           payoff_ratio = excluded.payoff_ratio, profit_factor = excluded.profit_factor, realized_pnl_usd = excluded.realized_pnl_usd, max_drawdown_pct = excluded.max_drawdown_pct,
-           avg_holding_hours = excluded.avg_holding_hours, recent_n_trades = excluded.recent_n_trades, recent_return_pct = excluded.recent_return_pct,
-           category_performance = excluded.category_performance, quality_score = excluded.quality_score, score_reasons = excluded.score_reasons, first_seen = excluded.first_seen, last_seen = excluded.last_seen, updated_at = now()`,
-        [perf.walletId, perf.address, perf.chainId, perf.nTrades, perf.nWins, perf.nLosses, perf.winRate, perf.avgReturnPct, perf.medianReturnPct, perf.avgWinPct, perf.avgLossPct, perf.payoffRatio, perf.profitFactor, perf.realizedPnlUsd, perf.maxDrawdownPct, perf.avgHoldingHours, perf.recentNTrades, perf.recentReturnPct, JSON.stringify(perf.categoryPerformance), perf.qualityScore, JSON.stringify(perf.scoreReasons), perf.firstSeen, perf.lastSeen],
-      );
-    }
 
-    const assetMap = new Map<string, string>();
-    for (const a of assetsForEvents) {
-      if (a.coingeckoId) assetMap.set(a.coingeckoId, a.id);
-    }
-    const copySignals = generateCopySignals({ trades: pmTrades, wallets: walletPerfMap, markets: pmDto, assetMap });
-    const copySignalDtos: CopySignalDTO[] = copySignals.slice(0, 20).map((s) => ({
-      id: s.id, walletId: s.walletId, address: s.address, marketId: s.marketId, assetId: s.assetId, side: s.side,
-      walletQualityScore: s.walletQualityScore, copyConfidence: s.copyConfidence, sourceTradeTimestamp: s.sourceTradeTimestamp,
-      latencySeconds: s.latencySeconds, expectedValue: s.expectedValue, reasons: s.reasons,
-    }));
-    for (const s of copySignals.slice(0, 20)) {
-      await sql.query(
-        `insert into copy_signals (id, wallet_id, market_id, asset_id, side, wallet_quality_score, copy_confidence, source_trade_id, source_trade_timestamp, observed_at, latency_seconds, expected_value, status, reasons, created_at)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13::jsonb,now())
-         on conflict (id) do update set copy_confidence = excluded.copy_confidence, expected_value = excluded.expected_value, updated_at = now()`,
-        [s.id, s.walletId, s.marketId, s.assetId, s.side, s.walletQualityScore, s.copyConfidence, s.sourceTradeId, s.sourceTradeTimestamp, s.observedAt, s.latencySeconds, s.expectedValue, JSON.stringify(s.reasons)],
-      );
+      const { trades: pmTrades, health: pmDataHealth } = await fetchPolymarketGlobalTrades(250);
+      if (pmDataHealth.status !== "down") health.push(pmDataHealth);
+      const walletPerfMap = new Map<string, WalletPerformanceV2>();
+      const walletTradesByWallet = new Map<string, PolymarketTrade[]>();
+      for (const t of pmTrades) {
+        const arr = walletTradesByWallet.get(t.walletId) ?? [];
+        arr.push(t);
+        walletTradesByWallet.set(t.walletId, arr);
+      }
+      const conditionIds = new Set(pmTrades.map((t) => t.conditionId).filter(Boolean));
+      const marketPrices = new Map<string, number>();
+      for (const m of pm.markets) {
+        if (m.id && conditionIds.has(m.id.toLowerCase())) {
+          marketPrices.set(m.id.toLowerCase(), num0(m.probability));
+        }
+      }
+      for (const [walletId, trades] of walletTradesByWallet.entries()) {
+        if (trades.length < 3) continue;
+        const perf = evaluateWalletPerformance(trades, marketPrices);
+        walletPerfMap.set(walletId, perf);
+        for (const t of trades) {
+          await sql.query(
+            `insert into polymarket_wallet_trades (id, wallet_id, chain_id, address, tx_hash, market_id, condition_id, event_slug, market_title, outcome, side, size, price, notional_usd, timestamp, observed_at, source)
+             values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+             on conflict (id) do nothing`,
+            [t.id, walletId, t.chainId, t.address, t.txHash, t.marketId, t.conditionId, t.eventSlug, t.marketTitle, t.outcome, t.side, t.size, t.price, t.notionalUsd, t.timestamp, t.observedAt, t.source],
+          );
+        }
+        await sql.query(
+          `insert into wallet_performance_v2 (wallet_id, address, chain_id, n_trades, n_wins, n_losses, win_rate, avg_return_pct, median_return_pct, avg_win_pct, avg_loss_pct, payoff_ratio, profit_factor, realized_pnl_usd, max_drawdown_pct, avg_holding_hours, recent_n_trades, recent_return_pct, category_performance, quality_score, score_reasons, first_seen, last_seen, updated_at)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20,$21::jsonb,$22,$23,now())
+           on conflict (wallet_id) do update set
+             n_trades = excluded.n_trades, n_wins = excluded.n_wins, n_losses = excluded.n_losses, win_rate = excluded.win_rate,
+             avg_return_pct = excluded.avg_return_pct, median_return_pct = excluded.median_return_pct, avg_win_pct = excluded.avg_win_pct, avg_loss_pct = excluded.avg_loss_pct,
+             payoff_ratio = excluded.payoff_ratio, profit_factor = excluded.profit_factor, realized_pnl_usd = excluded.realized_pnl_usd, max_drawdown_pct = excluded.max_drawdown_pct,
+             avg_holding_hours = excluded.avg_holding_hours, recent_n_trades = excluded.recent_n_trades, recent_return_pct = excluded.recent_return_pct,
+             category_performance = excluded.category_performance, quality_score = excluded.quality_score, score_reasons = excluded.score_reasons, first_seen = excluded.first_seen, last_seen = excluded.last_seen, updated_at = now()`,
+          [perf.walletId, perf.address, perf.chainId, perf.nTrades, perf.nWins, perf.nLosses, perf.winRate, perf.avgReturnPct, perf.medianReturnPct, perf.avgWinPct, perf.avgLossPct, perf.payoffRatio, perf.profitFactor, perf.realizedPnlUsd, perf.maxDrawdownPct, perf.avgHoldingHours, perf.recentNTrades, perf.recentReturnPct, JSON.stringify(perf.categoryPerformance), perf.qualityScore, JSON.stringify(perf.scoreReasons), perf.firstSeen, perf.lastSeen],
+        );
+      }
+
+      const assetMap = new Map<string, string>();
+      for (const a of assetsForEvents) {
+        if (a.coingeckoId) assetMap.set(a.coingeckoId, a.id);
+      }
+      const copySignals = generateCopySignals({ trades: pmTrades, wallets: walletPerfMap, markets: pmDto, assetMap });
+      copySignalDtos = copySignals.slice(0, 20).map((s) => ({
+        id: s.id, walletId: s.walletId, address: s.address, marketId: s.marketId, assetId: s.assetId, side: s.side,
+        walletQualityScore: s.walletQualityScore, copyConfidence: s.copyConfidence, sourceTradeTimestamp: s.sourceTradeTimestamp,
+        latencySeconds: s.latencySeconds, expectedValue: s.expectedValue, reasons: s.reasons,
+      }));
+      for (const s of copySignals.slice(0, 20)) {
+        await sql.query(
+          `insert into copy_signals (id, wallet_id, market_id, asset_id, side, wallet_quality_score, copy_confidence, source_trade_id, source_trade_timestamp, observed_at, latency_seconds, expected_value, status, reasons, created_at)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,'open',$13::jsonb,now())
+           on conflict (id) do update set copy_confidence = excluded.copy_confidence, expected_value = excluded.expected_value`,
+          [s.id, s.walletId, s.marketId, s.assetId, s.side, s.walletQualityScore, s.copyConfidence, s.sourceTradeId, s.sourceTradeTimestamp, s.observedAt, s.latencySeconds, s.expectedValue, JSON.stringify(s.reasons)],
+        );
+      }
+    } catch (addonErr) {
+      errors.push(`events/wallets: ${addonErr instanceof Error ? addonErr.message : "failed"}`);
     }
 
     const btcA = ranked.find((r) => r.asset.id === "cg:bitcoin");
