@@ -14,6 +14,7 @@ import {
   getSystem,
   getToken,
   getWallets,
+  getXIntelligenceDashboard,
   listBacktests,
   placeManualPaperTrade,
   runBacktestJob,
@@ -99,3 +100,7 @@ export const postPaperTrade = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     return placeManualPaperTrade(data);
   });
+
+export const fetchXIntelligence = createServerFn({ method: "GET" }).handler(async () => {
+  return getXIntelligenceDashboard();
+});
