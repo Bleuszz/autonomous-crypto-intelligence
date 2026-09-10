@@ -24,6 +24,8 @@ import {
   runTokenResearch,
   getTrainingDashboardData,
 } from "./ingest";
+import { assembleTradingIntelDashboard } from "./trading-intel/dashboard.ts";
+import { assetsFromRanked } from "./trading-intel/from-ranked.ts";
 
 export const fetchOverview = createServerFn({ method: "GET" }).handler(async () => {
   return getOverview();
@@ -125,4 +127,16 @@ export const fetchXIntelligence = createServerFn({ method: "GET" }).handler(asyn
 
 export const fetchTrainingDashboard = createServerFn({ method: "GET" }).handler(async () => {
   return getTrainingDashboardData();
+});
+
+export const fetchTradingIntelligence = createServerFn({ method: "GET" }).handler(async () => {
+  const raw = await getOpportunities();
+  const list = Array.isArray(raw)
+    ? raw
+    : raw && typeof raw === "object" && Array.isArray((raw as { opportunities?: unknown[] }).opportunities)
+      ? (raw as { opportunities: unknown[] }).opportunities
+      : raw && typeof raw === "object" && Array.isArray((raw as { ranked?: unknown[] }).ranked)
+        ? (raw as { ranked: unknown[] }).ranked
+        : [];
+  return assembleTradingIntelDashboard({ assets: assetsFromRanked(list as never[]) });
 });
