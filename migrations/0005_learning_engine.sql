@@ -1,6 +1,9 @@
 -- Reward + Adaptive Learning Engine schema.
 -- Unowned rows (auth is off). No secrets, no personal data, paper-only.
 
+-- Existing tables referenced by the ingest pipeline need an updated_at column.
+alter table copy_signals add column if not exists updated_at timestamptz;
+
 -- Immutable snapshot of every paper decision (entry, exit, wait, reject) with full context.
 create table if not exists trade_decision_snapshots (
   id text primary key,

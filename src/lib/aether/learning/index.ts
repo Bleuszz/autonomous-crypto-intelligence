@@ -1,9 +1,9 @@
 import { getSql, type Sql } from "@/lib/db";
 import { nowIso } from "../time.ts";
 import { num0 } from "../math.ts";
-import { createDecisionSnapshot, rid } from "./snapshots.ts";
+import { buildDataQuality, buildExecutionAssumptions, buildSizing, createDecisionSnapshot, rid } from "./snapshots.ts";
 import { computeFeatureAttributions, extractLesson } from "./attribution.ts";
-import { computeReward, REWARD_VERSION } from "./reward.ts";
+import { computeReward } from "./reward.ts";
 import { discoverPatterns, MIN_PATTERN_SAMPLES, promotePattern, rejectPattern } from "./patterns.ts";
 import { createLearnerVersion, DEFAULT_LEARNER_VERSION, DEFAULT_STRATEGY_ID, DEFAULT_STRATEGY_VERSION, recommendAction } from "./learner.ts";
 import { createStrategyCandidate } from "./promotion.ts";
@@ -142,7 +142,7 @@ export async function computeAndStoreReward(sql: Sql, snapshot: DecisionSnapshot
   return reward;
 }
 
-export async function loadCompletedExperiences(sql: Sql, limit = 500): Promise<Array<{ snapshot: DecisionSnapshot; reward: TradeReward }>> {
+export async function loadCompletedExperiences(sql: Sql, limit = 500): Promise<Array<{ snapshot: DecisionSnapshot; outcome: TradeOutcome; reward: TradeReward }>> {
   const rows = await sql.query<{
     s_id: string;
     s_portfolio_id: string;
@@ -182,6 +182,19 @@ export async function loadCompletedExperiences(sql: Sql, limit = 500): Promise<A
     r_avoidable_loss: string | null;
     r_decision_outcome_class: string | null;
     r_version: string;
+    o_id: string;
+    o_exit_action_at: string;
+    o_entry_price: number;
+    o_exit_price: number;
+    o_qty: number;
+    o_realized_pnl_usd: number;
+    o_realized_return_pct: number;
+    o_exit_reason: string;
+    o_stop_hit: boolean;
+    o_target_hit: boolean;
+    o_mfe_pct: number | null;
+    o_mae_pct: number | null;
+    o_holding_seconds: number;
   }>(
     `select
       s.id as s_id, s.portfolio_id as s_portfolio_id, s.asset_id as s_asset_id, s.symbol as s_symbol,
@@ -198,7 +211,11 @@ export async function loadCompletedExperiences(sql: Sql, limit = 500): Promise<A
       r.drawdown_penalty as r_drawdown_penalty, r.slippage_penalty as r_slippage_penalty,
       r.fee_penalty as r_fee_penalty, r.contradiction_penalty as r_contradiction_penalty,
       r.avoidable_loss as r_avoidable_loss, r.decision_outcome_class as r_decision_outcome_class,
-      r.version as r_version
+      r.version as r_version,
+      o.id as o_id, o.exit_action_at as o_exit_action_at, o.entry_price as o_entry_price, o.exit_price as o_exit_price,
+      o.qty as o_qty, o.realized_pnl_usd as o_realized_pnl_usd, o.realized_return_pct as o_realized_return_pct,
+      o.exit_reason as o_exit_reason, o.stop_hit as o_stop_hit, o.target_hit as o_target_hit,
+      o.mfe_pct as o_mfe_pct, o.mae_pct as o_mae_pct, o.holding_seconds as o_holding_seconds
      from trade_decision_snapshots s
      join trade_outcomes o on o.decision_snapshot_id = s.id
      join trade_rewards r on r.decision_snapshot_id = s.id
@@ -223,7 +240,7 @@ export async function loadCompletedExperiences(sql: Sql, limit = 500): Promise<A
       orderId: r.s_order_id,
       features: JSON.parse(r.s_features) as DecisionSnapshot["features"],
       marketStructure: JSON.parse(r.s_market_structure) as DecisionSnapshot["marketStructure"],
-      regime: JSON.parse(r.s_regime) as Record<string, unknown>,
+      regime: JSON.parse(r.s_regime) as Record<string, string | number | boolean | null>,
       evidence: JSON.parse(r.s_evidence) as DecisionSnapshot["evidence"],
       riskState: JSON.parse(r.s_risk_state) as DecisionSnapshot["riskState"],
       sizing: r.s_sizing ? (JSON.parse(r.s_sizing) as DecisionSnapshot["sizing"]) : null,
@@ -254,6 +271,33 @@ export async function loadCompletedExperiences(sql: Sql, limit = 500): Promise<A
       decisionOutcomeClass: r.r_decision_outcome_class as TradeReward["decisionOutcomeClass"],
       version: r.r_version,
       createdAt: r.s_action_at,
+    },
+    outcome: {
+      id: r.o_id,
+      decisionSnapshotId: r.s_id,
+      portfolioId: r.s_portfolio_id,
+      assetId: r.s_asset_id,
+      exitActionAt: r.o_exit_action_at,
+      entryPrice: r.o_entry_price,
+      exitPrice: r.o_exit_price,
+      qty: r.o_qty,
+      realizedPnlUsd: r.o_realized_pnl_usd,
+      realizedReturnPct: r.o_realized_return_pct,
+      realizedRMultiple: null,
+      feesUsd: 0,
+      gasUsd: 0,
+      slippageBps: 0,
+      holdingSeconds: r.o_holding_seconds,
+      mfePct: r.o_mfe_pct,
+      maePct: r.o_mae_pct,
+      drawdownImpactPct: null,
+      exitReason: r.o_exit_reason,
+      stopHit: r.o_stop_hit,
+      targetHit: r.o_target_hit,
+      thesisInvalidated: false,
+      postExitReturnPct: null,
+      opportunityCostPct: null,
+      createdAt: r.o_exit_action_at,
     },
   }));
 }
@@ -450,11 +494,15 @@ export async function getLearningDashboard(): Promise<LearningDashboard> {
   };
 
   const tradeRows = await loadCompletedExperiences(sql, 100);
-  const goodTrades = tradeRows.filter((t) => t.reward.totalReward > 0.25);
-  const badTrades = tradeRows.filter((t) => t.reward.totalReward < -0.25);
+  const goodTrades = tradeRows
+    .filter((t) => t.reward.totalReward > 0.25)
+    .map((t) => ({ ...t.reward, snapshot: t.snapshot, outcome: t.outcome, attributions: [] as FeatureAttribution[] }));
+  const badTrades = tradeRows
+    .filter((t) => t.reward.totalReward < -0.25)
+    .map((t) => ({ ...t.reward, snapshot: t.snapshot, outcome: t.outcome, attributions: [] as FeatureAttribution[] }));
 
   for (const t of [...goodTrades, ...badTrades].slice(0, 20)) {
-    t.attributions = await loadAttributions(sql, t.reward.id);
+    t.attributions = await loadAttributions(sql, t.id);
   }
 
   const patternRows = await sql.query<DiscoveredPattern>(
@@ -504,5 +552,5 @@ async function loadAttributions(sql: Sql, rewardId: string): Promise<FeatureAttr
   }));
 }
 
-export { createDecisionSnapshot, rid, computeReward, computeFeatureAttributions, recommendAction, promotePattern, rejectPattern, extractLesson };
-export type { DecisionContext, DecisionSnapshot, TradeReward, TradeOutcome, DiscoveredPattern, LearningDashboard };
+export { buildDataQuality, buildExecutionAssumptions, buildSizing, createDecisionSnapshot, rid, computeReward, computeFeatureAttributions, recommendAction, promotePattern, rejectPattern, extractLesson };
+export type { DecisionContext, DecisionSnapshot, LearnerRecommendation, TradeReward, TradeOutcome, DiscoveredPattern, LearningDashboard };

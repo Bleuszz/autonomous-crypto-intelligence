@@ -1,4 +1,3 @@
-import { clamp, num0 } from "../math.ts";
 import { rid } from "./snapshots.ts";
 import type { DecisionAction, DecisionSnapshot, DiscoveredPattern, TradeReward } from "./types.ts";
 
@@ -186,7 +185,7 @@ export function canPromote(pattern: DiscoveredPattern): { ok: boolean; reason: s
   if (pattern.positiveCount < MIN_PATTERN_POSITIVE) return { ok: false, reason: `Insufficient positive samples (${pattern.positiveCount})` };
   if ((pattern.expectancy ?? 0) <= 0) return { ok: false, reason: "Expectancy is not positive" };
   if ((pattern.confidenceLower ?? 0) <= 0) return { ok: false, reason: "Lower confidence bound is not positive" };
-  if ((pattern.oosExpectancy ?? null) != null && pattern.oosExpectancy <= 0) return { ok: false, reason: "OOS expectancy is not positive" };
+  if (pattern.oosExpectancy != null && pattern.oosExpectancy <= 0) return { ok: false, reason: "OOS expectancy is not positive" };
   return { ok: true, reason: "" };
 }
 
@@ -196,7 +195,7 @@ export function promotePattern(pattern: DiscoveredPattern, championVersion: stri
   return { ...pattern, status: "APPROVED", promotedAt: new Date().toISOString(), championVersion, updatedAt: new Date().toISOString() };
 }
 
-export function rejectPattern(pattern: DiscoveredPattern, reason?: string): DiscoveredPattern {
+export function rejectPattern(pattern: DiscoveredPattern, _reason?: string): DiscoveredPattern {
   return { ...pattern, status: "REJECTED", updatedAt: new Date().toISOString() };
 }
 

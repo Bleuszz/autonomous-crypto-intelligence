@@ -1,36 +1,10 @@
 import { rid } from "./snapshots.ts";
-import type { DecisionSnapshot, DiscoveredPattern, LearnerVersion, StrategyCandidate, TradeReward } from "./types.ts";
-
-export type PromotionStage =
-  | "DISCOVERED"
-  | "SHADOW"
-  | "TRAINED"
-  | "VALIDATED"
-  | "OUT-OF-SAMPLE"
-  | "WALK-FORWARD"
-  | "STABILITY-CHECK"
-  | "PAPER-CANARY"
-  | "APPROVED"
-  | "REJECTED";
+import type { ChampionChallengerMetrics, DecisionSnapshot, DiscoveredPattern, LearnerVersion, PromotionStage, StrategyCandidate, TradeReward } from "./types.ts";
 
 export type PromotionResult = {
   ok: boolean;
   reason: string;
   nextStage: PromotionStage;
-};
-
-export type ChampionChallengerMetrics = {
-  totalReturnPct: number;
-  sharpe: number;
-  maxDrawdownPct: number;
-  winRate: number;
-  expectancy: number;
-  calmar: number | null;
-  payoffRatio: number;
-  nTrades: number;
-  tradesByRegime: Record<string, { n: number; avgReturn: number }>;
-  tradesByAsset: Record<string, { n: number; avgReturn: number }>;
-  costSensitivity: Record<string, number>;
 };
 
 export function createStrategyCandidate(opts: {
@@ -124,7 +98,7 @@ export function canAdvanceStage(opts: {
   patterns: DiscoveredPattern[];
   experiences: Array<{ snapshot: DecisionSnapshot; reward: TradeReward; validationStatus: string }>;
 }): PromotionResult {
-  const history = opts.candidate.promotionPipeline.history as PromotionStage[];
+  const history = opts.candidate.promotionPipeline.history;
   const current = history[history.length - 1] ?? "DISCOVERED";
 
   switch (current) {
@@ -169,7 +143,7 @@ export function canAdvanceStage(opts: {
 
 export function advanceCandidate(candidate: StrategyCandidate, nextStage: PromotionStage): StrategyCandidate {
   if (nextStage === "REJECTED") {
-    return { ...candidate, status: "REJECTED", promotionPipeline: { ...candidate.promotionPipeline, current: nextStage, history: [...(candidate.promotionPipeline.history as string[]), nextStage] } };
+    return { ...candidate, status: "REJECTED", promotionPipeline: { ...candidate.promotionPipeline, current: nextStage, history: [...candidate.promotionPipeline.history, nextStage] } };
   }
   const approvedAt = nextStage === "APPROVED" ? new Date().toISOString() : candidate.approvedAt;
   const status = nextStage === "APPROVED" ? "APPROVED" : (candidate.status as StrategyCandidate["status"]);
@@ -177,7 +151,7 @@ export function advanceCandidate(candidate: StrategyCandidate, nextStage: Promot
     ...candidate,
     status,
     approvedAt,
-    promotionPipeline: { ...candidate.promotionPipeline, current: nextStage, history: [...(candidate.promotionPipeline.history as string[]), nextStage] },
+    promotionPipeline: { ...candidate.promotionPipeline, current: nextStage, history: [...candidate.promotionPipeline.history, nextStage] },
   };
 }
 
@@ -185,7 +159,7 @@ export function rejectCandidate(candidate: StrategyCandidate, reason: string): S
   return {
     ...candidate,
     status: "REJECTED",
-    promotionPipeline: { ...candidate.promotionPipeline, current: "REJECTED", history: [...(candidate.promotionPipeline.history as string[]), "REJECTED"] },
+    promotionPipeline: { ...candidate.promotionPipeline, current: "REJECTED", history: [...candidate.promotionPipeline.history, "REJECTED"] },
     validationResults: { ...candidate.validationResults, rejectionReason: reason },
   };
 }
@@ -196,7 +170,7 @@ export function rollBackCandidate(candidate: StrategyCandidate, reason: string):
     status: "REJECTED",
     rolledBackAt: new Date().toISOString(),
     rollbackReason: reason,
-    promotionPipeline: { ...candidate.promotionPipeline, current: "REJECTED", history: [...(candidate.promotionPipeline.history as string[]), "REJECTED"] },
+    promotionPipeline: { ...candidate.promotionPipeline, current: "REJECTED", history: [...candidate.promotionPipeline.history, "REJECTED"] },
   };
 }
 

@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
 import { canAdvanceStage, championNeedsRollback, compareChallengerToChampion, createStrategyCandidate, rejectCandidate, rollBackCandidate } from "./promotion.ts";
-import type { ChampionChallengerMetrics, StrategyCandidate, TradeReward } from "./types.ts";
+import type { ChampionChallengerMetrics, StrategyCandidate } from "./types.ts";
 
 function makeCandidate(): StrategyCandidate {
   return createStrategyCandidate({ strategyId: "ensemble", strategyVersion: "1.1.0", learnerVersion: "0.2.0" });
@@ -25,51 +26,51 @@ function makeMetrics(): ChampionChallengerMetrics {
 describe("promotion pipeline", () => {
   it("creates a candidate in CANDIDATE status", () => {
     const c = makeCandidate();
-    expect(c.status).toBe("CANDIDATE");
-    expect(c.learnerVersion).toBe("0.2.0");
+    assert.equal(c.status, "CANDIDATE");
+    assert.equal(c.learnerVersion, "0.2.0");
   });
 
   it("cannot advance from DISCOVERED without shadow experiences", () => {
     const c = makeCandidate();
     const res = canAdvanceStage({ candidate: c, learner: { trainingExperienceCount: 0 } as any, patterns: [], experiences: [] });
-    expect(res.ok).toBe(true);
-    expect(res.nextStage).toBe("SHADOW");
+    assert.equal(res.ok, true);
+    assert.equal(res.nextStage, "SHADOW");
   });
 
   it("requires shadow experiences before training", () => {
     const c = { ...makeCandidate(), promotionPipeline: { current: "SHADOW", history: ["DISCOVERED", "SHADOW"] } } as StrategyCandidate;
     const res = canAdvanceStage({ candidate: c, learner: { trainingExperienceCount: 0 } as any, patterns: [], experiences: [] });
-    expect(res.ok).toBe(false);
-    expect(res.reason).toContain("shadow experiences");
+    assert.equal(res.ok, false);
+    assert.ok(res.reason.includes("shadow experiences"));
   });
 
   it("requires training experiences before validation", () => {
     const c = { ...makeCandidate(), promotionPipeline: { current: "TRAINED", history: ["DISCOVERED", "SHADOW", "TRAINED"] } } as StrategyCandidate;
     const res = canAdvanceStage({ candidate: c, learner: { trainingExperienceCount: 5 } as any, patterns: [], experiences: [] });
-    expect(res.ok).toBe(false);
-    expect(res.reason).toContain("training experiences");
+    assert.equal(res.ok, false);
+    assert.ok(res.reason.includes("training experiences"));
   });
 
   it("rejects a candidate", () => {
     const c = makeCandidate();
     const rejected = rejectCandidate(c, "underperformed in OOS");
-    expect(rejected.status).toBe("REJECTED");
-    expect(rejected.promotionPipeline.current).toBe("REJECTED");
+    assert.equal(rejected.status, "REJECTED");
+    assert.equal(rejected.promotionPipeline.current, "REJECTED");
   });
 
   it("rolls back a candidate", () => {
     const c = makeCandidate();
     const rolled = rollBackCandidate(c, "post-approval drawdown exceeded");
-    expect(rolled.status).toBe("REJECTED");
-    expect(rolled.rollbackReason).toContain("drawdown");
+    assert.equal(rolled.status, "REJECTED");
+    assert.ok((rolled.rollbackReason ?? "").includes("drawdown"));
   });
 
   it("compares challenger vs champion on multiple metrics", () => {
     const challenger: ChampionChallengerMetrics = { ...makeMetrics(), totalReturnPct: 15, sharpe: 1.4 };
     const champion = makeMetrics();
     const cmp = compareChallengerToChampion(challenger, champion);
-    expect(cmp.wins).toBeGreaterThan(0);
-    expect(cmp.details.totalReturnPct.winner).toBe("challenger");
+    assert.ok(cmp.wins > 0);
+    assert.equal(cmp.details.totalReturnPct.winner, "challenger");
   });
 
   it("flags fragile challenger when cost sensitivity destroys performance", () => {
@@ -79,24 +80,24 @@ describe("promotion pipeline", () => {
     };
     const champion = makeMetrics();
     const cmp = compareChallengerToChampion(challenger, champion);
-    expect(cmp.details.costSensitivity?.winner).toBe("champion");
+    assert.equal(cmp.details.costSensitivity?.winner, "champion");
   });
 
   it("does not roll back a fresh champion", () => {
     const metrics = makeMetrics();
     const check = championNeedsRollback(metrics, 1 * 24 * 3600 * 1000, 5);
-    expect(check.rollback).toBe(false);
+    assert.equal(check.rollback, false);
   });
 
   it("rolls back when post-approval expectancy turns negative", () => {
     const metrics: ChampionChallengerMetrics = { ...makeMetrics(), nTrades: 10, expectancy: -0.05 };
     const check = championNeedsRollback(metrics, 5 * 24 * 3600 * 1000, 5);
-    expect(check.rollback).toBe(true);
+    assert.equal(check.rollback, true);
   });
 
   it("does not roll back with sufficient positive performance", () => {
     const metrics: ChampionChallengerMetrics = { ...makeMetrics(), nTrades: 12, expectancy: 0.2, maxDrawdownPct: 10 };
     const check = championNeedsRollback(metrics, 5 * 24 * 3600 * 1000, 5);
-    expect(check.rollback).toBe(false);
+    assert.equal(check.rollback, false);
   });
 });

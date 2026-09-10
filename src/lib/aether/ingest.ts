@@ -70,7 +70,6 @@ import {
 } from "./wallet-intelligence";
 import {
   buildDataQuality,
-  buildSizing,
   computeFeatureAttributions,
   computeReward,
   ensureLearnerVersion,
@@ -82,6 +81,7 @@ import {
   rid as learningRid,
   runLearningJobs,
   type DecisionContext,
+  type DecisionSnapshot,
   type LearnerRecommendation,
   type LearningDashboard,
 } from "./learning/index.ts";
@@ -411,8 +411,8 @@ function entrySnapshotContext(
   equity: number,
   cash: number,
   dayAnchor: number,
-  signalId?: string,
-  orderId?: string,
+  signalId?: string | null,
+  orderId?: string | null,
   learnerRec?: LearnerRecommendation | null,
 ): DecisionContext {
   const sizing = {
@@ -438,7 +438,7 @@ function entrySnapshotContext(
     source: r.asset.source,
     stalenessFlags: freshness === "STALE" ? ["price_stale"] : [],
   });
-  const riskState = {
+  const _riskState = {
     positionPctOfEquity: sizing.positionSizePct,
     tokenConcentrationPct: sizing.positionSizePct,
     chainExposurePct: sizing.positionSizePct,
@@ -626,7 +626,7 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
                 orderId: snapRow.order_id,
                 features: JSON.parse(snapRow.features) as DecisionSnapshot["features"],
                 marketStructure: JSON.parse(snapRow.market_structure) as DecisionSnapshot["marketStructure"],
-                regime: JSON.parse(snapRow.regime) as Record<string, unknown>,
+                regime: JSON.parse(snapRow.regime) as Record<string, string | number | boolean | null>,
                 evidence: JSON.parse(snapRow.evidence) as DecisionSnapshot["evidence"],
                 riskState: JSON.parse(snapRow.risk_state) as DecisionSnapshot["riskState"],
                 sizing: snapRow.sizing ? (JSON.parse(snapRow.sizing) as DecisionSnapshot["sizing"]) : null,
@@ -1417,12 +1417,14 @@ async function ingestOnce(): Promise<void> {
       if (trades.length < 3) continue; // need some history
       const perf = evaluateWalletPerformance(trades, marketPrices);
       walletPerfMap.set(walletId, perf);
-      await sql.query(
-        `insert into polymarket_wallet_trades (id, wallet_id, chain_id, address, tx_hash, market_id, condition_id, event_slug, market_title, outcome, side, size, price, notional_usd, timestamp, observed_at, source)
-         values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
-         on conflict (id) do nothing`,
-        trades.map((t) => [t.id, walletId, t.chainId, t.address, t.txHash, t.marketId, t.conditionId, t.eventSlug, t.marketTitle, t.outcome, t.side, t.size, t.price, t.notionalUsd, t.timestamp, t.observedAt, t.source]),
-      );
+      for (const t of trades) {
+        await sql.query(
+          `insert into polymarket_wallet_trades (id, wallet_id, chain_id, address, tx_hash, market_id, condition_id, event_slug, market_title, outcome, side, size, price, notional_usd, timestamp, observed_at, source)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+           on conflict (id) do nothing`,
+          [t.id, walletId, t.chainId, t.address, t.txHash, t.marketId, t.conditionId, t.eventSlug, t.marketTitle, t.outcome, t.side, t.size, t.price, t.notionalUsd, t.timestamp, t.observedAt, t.source],
+        );
+      }
       await sql.query(
         `insert into wallet_performance_v2 (wallet_id, address, chain_id, n_trades, n_wins, n_losses, win_rate, avg_return_pct, median_return_pct, avg_win_pct, avg_loss_pct, payoff_ratio, profit_factor, realized_pnl_usd, max_drawdown_pct, avg_holding_hours, recent_n_trades, recent_return_pct, category_performance, quality_score, score_reasons, first_seen, last_seen, updated_at)
          values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19::jsonb,$20,$21::jsonb,$22,$23,now())

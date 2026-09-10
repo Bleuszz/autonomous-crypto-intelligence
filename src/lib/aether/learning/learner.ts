@@ -1,7 +1,7 @@
-import { clamp, num0 } from "../math.ts";
-import { buildPatternConditions, hashConditions, type PatternConditions } from "./patterns.ts";
+import { clamp } from "../math.ts";
+import { buildPatternConditions, type PatternConditions } from "./patterns.ts";
 import { rid } from "./snapshots.ts";
-import type { DecisionAction, DecisionSnapshot, DiscoveredPattern, LearnerRecommendation, LearnerVersion, TradeReward } from "./types.ts";
+import type { DecisionAction, DecisionSnapshot, DiscoveredPattern, LearnerRecommendation, LearnerVersion, SerializableRecord, TradeReward } from "./types.ts";
 
 export const DEFAULT_LEARNER_VERSION = "0.1.0-shadow";
 export const DEFAULT_STRATEGY_ID = "ensemble";
@@ -133,7 +133,7 @@ export function createLearnerVersion(opts: {
   strategyVersion: string;
   status?: LearnerVersion["status"];
   featuresUsed?: string[];
-  hyperparameters?: Record<string, unknown>;
+  hyperparameters?: SerializableRecord;
   trainingExperienceCount?: number;
   trainingPeriodStart?: string;
   trainingPeriodEnd?: string;

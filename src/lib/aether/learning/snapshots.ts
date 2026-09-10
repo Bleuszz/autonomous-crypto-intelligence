@@ -226,7 +226,7 @@ export function createDecisionSnapshot(
     orderId: ctx.orderId ?? null,
     features,
     marketStructure,
-    regime: regimeObj as Record<string, unknown>,
+    regime: regimeObj as Record<string, string | number | boolean | null>,
     evidence: ctx.dataQuality ? buildEvidence({
         newsBoost: 0,
         socialBoost: 0,

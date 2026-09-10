@@ -7,6 +7,19 @@ export type AvoidableLoss = "AVOIDABLE" | "PROBABLY_UNAVOIDABLE" | "INSUFFICIENT
 export type DecisionOutcomeClass = "GOOD_GOOD" | "GOOD_BAD" | "BAD_GOOD" | "BAD_BAD";
 export type PatternStatus = "DISCOVERED" | "SHADOW" | "VALIDATING" | "APPROVED" | "REJECTED";
 export type LearnerStatus = "SHADOW" | "CANDIDATE" | "VALIDATING" | "APPROVED" | "REJECTED" | "ROLLED_BACK";
+export type PromotionStage =
+  | "DISCOVERED"
+  | "SHADOW"
+  | "TRAINED"
+  | "VALIDATED"
+  | "OUT-OF-SAMPLE"
+  | "WALK-FORWARD"
+  | "STABILITY-CHECK"
+  | "PAPER-CANARY"
+  | "APPROVED"
+  | "REJECTED";
+export type PromotionPipeline = { current: PromotionStage; history: PromotionStage[] };
+export type SerializableRecord = Record<string, string | number | boolean | null>;
 
 export type DecisionFeatures = {
   momentum: number;
@@ -123,7 +136,7 @@ export type DecisionSnapshot = {
   orderId: string | null;
   features: DecisionFeatures;
   marketStructure: MarketStructure;
-  regime: Record<string, unknown>;
+  regime: Record<string, string | number | boolean | null>;
   evidence: EvidenceState;
   riskState: RiskState;
   sizing: SizingInfo | null;
@@ -227,6 +240,15 @@ export type DiscoveredPattern = {
   updatedAt: string;
 };
 
+export type LessonEvidence = {
+  positive?: Array<{ name: string; weight: number | null }>;
+  negative?: Array<{ name: string; weight: number | null }>;
+  reward?: number;
+  avoidableLoss?: string | null;
+  decisionOutcomeClass?: string | null;
+  attributions?: Array<{ name: string; contribution: Contribution }>;
+};
+
 export type Lesson = {
   id: string;
   patternId: string | null;
@@ -234,7 +256,7 @@ export type Lesson = {
   lessonType: "POSITIVE" | "NEGATIVE" | "CAVEAT";
   title: string;
   body: string;
-  evidence: Record<string, unknown>;
+  evidence: LessonEvidence;
   confidence: "HIGH" | "MODERATE" | "LOW" | "INSUFFICIENT_EVIDENCE";
   createdAt: string;
 };
@@ -249,7 +271,7 @@ export type LearnerVersion = {
   trainingPeriodEnd: string | null;
   trainingExperienceCount: number;
   featuresUsed: string[];
-  hyperparameters: Record<string, unknown>;
+  hyperparameters: SerializableRecord;
   validationMetrics: Record<string, number>;
   oosMetrics: Record<string, number>;
   walkForwardMetrics: Record<string, number>;
@@ -270,8 +292,8 @@ export type StrategyCandidate = {
   learnerVersion: string;
   championVersion: string | null;
   status: LearnerStatus;
-  promotionPipeline: Record<string, unknown>;
-  validationResults: Record<string, unknown>;
+  promotionPipeline: PromotionPipeline;
+  validationResults: SerializableRecord;
   createdAt: string;
   approvedAt: string | null;
   rolledBackAt: string | null;
@@ -284,9 +306,9 @@ export type LearningExperience = {
   decisionSnapshotId: string;
   rewardId: string | null;
   patternSignatures: string[];
-  featureVector: Record<string, unknown>;
+  featureVector: SerializableRecord;
   reward: number | null;
-  outcome: Record<string, unknown>;
+  outcome: SerializableRecord;
   attribution: Record<string, Contribution>;
   validationStatus: "IN_SAMPLE" | "OOS" | "WALK_FORWARD" | "REJECTED";
   usedForTraining: boolean;
@@ -306,6 +328,20 @@ export type LearningOverview = {
   approvedPatterns: number;
   shadowPatterns: number;
   lessons: number;
+};
+
+export type ChampionChallengerMetrics = {
+  totalReturnPct: number;
+  sharpe: number;
+  maxDrawdownPct: number;
+  winRate: number;
+  expectancy: number;
+  calmar: number | null;
+  payoffRatio: number;
+  nTrades: number;
+  tradesByRegime: Record<string, { n: number; avgReturn: number }>;
+  tradesByAsset: Record<string, { n: number; avgReturn: number }>;
+  costSensitivity: Record<string, number>;
 };
 
 export type LearningDashboard = {

@@ -1,9 +1,11 @@
-import { describe, expect, it } from "vitest";
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
 import { buildFeatures, buildMarketStructure, createDecisionSnapshot, htfTrend, priceVsHigh, sparkDistFromHigh, validateNoLookAhead, volatilityRegime } from "./snapshots.ts";
-import type { DecisionContext, DecisionSnapshot } from "./types.ts";
+import type { AssetRow } from "../types.ts";
+import type { DecisionContext } from "./types.ts";
 
-function makeRanked(opts: Partial<NonNullable<DecisionContext["ranked"]>>["asset"] = {}) {
-  const asset = {
+function makeRanked(opts: Partial<AssetRow> = {}) {
+  const base: AssetRow = {
     id: "cg:bitcoin",
     symbol: "BTC",
     name: "Bitcoin",
@@ -27,8 +29,8 @@ function makeRanked(opts: Partial<NonNullable<DecisionContext["ranked"]>>["asset
     observedAt: new Date().toISOString(),
     ingestedAt: new Date().toISOString(),
     dataAgeMs: 10_000,
-    ...opts,
   };
+  const asset = Object.assign({}, base, opts);
   return {
     asset,
     score: 0.72,
@@ -52,37 +54,37 @@ function makeRanked(opts: Partial<NonNullable<DecisionContext["ranked"]>>["asset
 
 describe("snapshots", () => {
   it("computes distance from 7d high", () => {
-    expect(sparkDistFromHigh([50, 60, 55, 62, 58])).toBeCloseTo((62 - 58) / 62 * 100, 1);
-    expect(sparkDistFromHigh(null)).toBeNull();
+    assert.ok(Math.abs(sparkDistFromHigh([50, 60, 55, 62, 58])! - (62 - 58) / 62 * 100) < 0.1);
+    assert.equal(sparkDistFromHigh(null), null);
   });
 
   it("classifies HTF trend from 7d change", () => {
-    expect(htfTrend([50, 55, 60], 6)).toBe("bullish");
-    expect(htfTrend([60, 55, 50], -9)).toBe("bearish");
-    expect(htfTrend([50, 51, 52], 1)).toBe("neutral");
+    assert.equal(htfTrend([50, 55, 60], 6), "bullish");
+    assert.equal(htfTrend([60, 55, 50], -9), "bearish");
+    assert.equal(htfTrend([50, 51, 52], 1), "neutral");
   });
 
   it("classifies price vs high", () => {
-    expect(priceVsHigh(1)).toBe("near_high");
-    expect(priceVsHigh(25)).toBe("near_low");
-    expect(priceVsHigh(10)).toBe("mid");
+    assert.equal(priceVsHigh(1), "near_high");
+    assert.equal(priceVsHigh(25), "near_low");
+    assert.equal(priceVsHigh(10), "mid");
   });
 
   it("classifies volatility regime", () => {
-    expect(volatilityRegime(30)).toBe("high");
-    expect(volatilityRegime(12)).toBe("medium");
-    expect(volatilityRegime(3)).toBe("low");
+    assert.equal(volatilityRegime(30), "high");
+    assert.equal(volatilityRegime(12), "medium");
+    assert.equal(volatilityRegime(3), "low");
   });
 
   it("builds market structure", () => {
     const ms = buildMarketStructure({ sparkline7d: [50_000, 55_000, 60_000], change24hPct: 3, change7dPct: 6 });
-    expect(ms.htfTrend).toBe("bullish");
-    expect(ms.priceVs7dHigh).toBe("near_high");
-    expect(ms.volatilityRegime).toBe("low");
+    assert.equal(ms.htfTrend, "bullish");
+    assert.equal(ms.priceVs7dHigh, "near_high");
+    assert.equal(ms.volatilityRegime, "low");
   });
 
   it("builds decision features", () => {
-    const r = makeRanked();
+    const r = makeRanked({ sparkline7d: [60_000, 55_000, 50_000, 58_000, 59_000] });
     const f = buildFeatures({
       score: r.score,
       confidence: r.confidence,
@@ -95,9 +97,9 @@ describe("snapshots", () => {
       isMajor: true,
       isDex: false,
     });
-    expect(f.momentum).toBeCloseTo(0.65, 2);
-    expect(f.isMajor).toBe(true);
-    expect(f.distFrom7dHighPct).toBeGreaterThan(0);
+    assert.ok(Math.abs(f.momentum - 0.65) < 0.01);
+    assert.equal(f.isMajor, true);
+    assert.ok(f.distFrom7dHighPct != null && f.distFrom7dHighPct > 0);
   });
 
   it("creates an immutable decision snapshot", () => {
@@ -111,21 +113,19 @@ describe("snapshots", () => {
       ranked: makeRanked(),
     };
     const s = createDecisionSnapshot(ctx);
-    expect(s.assetId).toBe("cg:bitcoin");
-    expect(s.decision).toBe("ENTER");
-    expect(s.side).toBe("buy");
-    expect(s.strategyId).toBe("momentum_v2");
-    expect(s.features.score).toBeGreaterThan(0);
-    // Snapshot must not be mutated by later outcome changes.
+    assert.equal(s.assetId, "cg:bitcoin");
+    assert.equal(s.decision, "ENTER");
+    assert.equal(s.side, "buy");
+    assert.equal(s.strategyId, "momentum_v2");
+    assert.ok(s.features.score > 0);
     const originalActionAt = s.actionAt;
-    expect(validateNoLookAhead(s, new Date(Date.now() + 1000).toISOString())).toBe(true);
-    expect(s.actionAt).toBe(originalActionAt);
+    assert.equal(validateNoLookAhead(s, new Date(Date.now() + 1000).toISOString()), true);
+    assert.equal(s.actionAt, originalActionAt);
   });
 
   it("rejects look-ahead snapshots", () => {
     const ctx: DecisionContext = { assetId: "cg:bitcoin", symbol: "BTC", decision: "WAIT", strategyId: "x", strategyVersion: "1" };
     const s = createDecisionSnapshot(ctx);
-    // Outcome time before decision time should be invalid.
-    expect(validateNoLookAhead(s, new Date(Date.now() - 1000).toISOString())).toBe(false);
+    assert.equal(validateNoLookAhead(s, new Date(Date.now() - 1000).toISOString()), false);
   });
 });

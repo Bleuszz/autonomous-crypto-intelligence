@@ -132,7 +132,7 @@ function riskDiscipline(snapshot: DecisionSnapshot, outcome: TradeOutcome): numb
   return clamp(q, -0.3, 0.2);
 }
 
-function avoidableLoss(snapshot: DecisionSnapshot, outcome: TradeOutcome): AvoidableLoss {
+function avoidableLoss(snapshot: DecisionSnapshot, outcome: TradeOutcome): AvoidableLoss | null {
   // A loss is avoidable when the evidence at entry was weak or contradictory.
   if (outcome.realizedReturnPct >= 0) return null;
 

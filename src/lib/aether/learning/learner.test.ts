@@ -1,45 +1,51 @@
-import { describe, expect, it } from "vitest";
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
 import { createDecisionSnapshot } from "./snapshots.ts";
 import { computeReward } from "./reward.ts";
 import { discoverPatterns } from "./patterns.ts";
 import { createLearnerVersion, DEFAULT_LEARNER_VERSION, estimateExpectedReward, recommendAction } from "./learner.ts";
+import type { AssetRow } from "../types.ts";
 import type { DecisionContext, TradeOutcome } from "./types.ts";
 
-function makeCtx(action: DecisionContext["decision"] = "ENTER", overrides: Partial<NonNullable<DecisionContext["ranked"]>>["asset"] = {}): DecisionContext {
+function baseAsset(): AssetRow {
   return {
-    assetId: "cg:bitcoin",
+    id: "cg:bitcoin",
     symbol: "BTC",
+    name: "Bitcoin",
+    kind: "major",
+    chainId: null,
+    contractAddress: null,
+    coingeckoId: "bitcoin",
+    imageUrl: null,
+    priceUsd: 60_000,
+    marketCapUsd: 1_200_000_000_000,
+    fdvUsd: null,
+    volume24hUsd: 20_000_000_000,
+    liquidityUsd: 1_000_000_000,
+    change1hPct: 0.5,
+    change24hPct: 2.5,
+    change7dPct: 5.0,
+    pairCreatedAt: null,
+    sparkline7d: [50_000, 52_000, 55_000, 58_000, 60_000],
+    source: "coingecko",
+    sourceReliability: 0.88,
+    observedAt: new Date().toISOString(),
+    ingestedAt: new Date().toISOString(),
+    dataAgeMs: 10_000,
+  };
+}
+
+function makeCtx(action: DecisionContext["decision"] = "ENTER", assetOverrides: Partial<AssetRow> = {}): DecisionContext {
+  const asset = { ...baseAsset(), ...assetOverrides };
+  return {
+    assetId: asset.id,
+    symbol: asset.symbol,
     decision: action,
     side: action === "ENTER" ? "buy" : undefined,
     strategyId: "t",
     strategyVersion: "1",
     ranked: {
-      asset: {
-        id: "cg:bitcoin",
-        symbol: "BTC",
-        name: "Bitcoin",
-        kind: "major",
-        chainId: null,
-        contractAddress: null,
-        coingeckoId: "bitcoin",
-        imageUrl: null,
-        priceUsd: 60_000,
-        marketCapUsd: 1_200_000_000_000,
-        fdvUsd: null,
-        volume24hUsd: 20_000_000_000,
-        liquidityUsd: 1_000_000_000,
-        change1hPct: 0.5,
-        change24hPct: 2.5,
-        change7dPct: 5.0,
-        pairCreatedAt: null,
-        sparkline7d: [50_000, 55_000, 60_000],
-        source: "coingecko",
-        sourceReliability: 0.88,
-        observedAt: new Date().toISOString(),
-        ingestedAt: new Date().toISOString(),
-        dataAgeMs: 10_000,
-        ...overrides,
-      },
+      asset,
       score: 0.7,
       confidence: 0.65,
       rugRisk: 0.1,
@@ -93,28 +99,28 @@ function makeOutcome(reward: number): TradeOutcome {
 describe("contextual learner", () => {
   it("starts in shadow mode", () => {
     const learner = createLearnerVersion({ version: DEFAULT_LEARNER_VERSION, strategyId: "ensemble", strategyVersion: "1.0.0" });
-    expect(learner.status).toBe("SHADOW");
-    expect(learner.learnerVersion).toBe(DEFAULT_LEARNER_VERSION);
+    assert.equal(learner.status, "SHADOW");
+    assert.equal(learner.learnerVersion, DEFAULT_LEARNER_VERSION);
   });
 
   it("returns zero expectation when no patterns exist", () => {
     const snapshot = createDecisionSnapshot(makeCtx());
     const rec = estimateExpectedReward({ snapshot, action: "ENTER", patterns: [] });
-    expect(rec.expectedReward).toBe(0);
-    expect(rec.confidence).toBe(0);
+    assert.equal(rec.expectedReward, 0);
+    assert.equal(rec.confidence, 0);
   });
 
   it("recommends the action with highest expected reward", () => {
     const snapshots = Array.from({ length: 15 }, () => createDecisionSnapshot(makeCtx()));
     const rewards = snapshots.map((s) => computeReward(s, makeOutcome(5)));
     const patterns = discoverPatterns({ snapshots, rewards, action: "ENTER" });
-    expect(patterns.length).toBeGreaterThan(0);
+    assert.ok(patterns.length > 0);
 
     const rec = recommendAction({ snapshot: createDecisionSnapshot(makeCtx()), patterns });
-    expect(["ENTER", "WAIT", "REJECT"]).toContain(rec.action);
-    expect(rec.expectedReward).toBeGreaterThanOrEqual(-1);
-    expect(rec.confidence).toBeGreaterThanOrEqual(0);
-    expect(rec.reasons.length).toBeGreaterThan(0);
+    assert.ok(["ENTER", "WAIT", "REJECT"].includes(rec.action));
+    assert.ok(rec.expectedReward >= -1);
+    assert.ok(rec.confidence >= 0);
+    assert.ok(rec.reasons.length > 0);
   });
 
   it("weights recent patterns more heavily", () => {
@@ -155,7 +161,7 @@ describe("contextual learner", () => {
     snapshot.features.liquidity = 0.8;
     const recNew = estimateExpectedReward({ snapshot, action: "ENTER", patterns: [newPattern], recencyDecayDays: 30 });
     const recOld = estimateExpectedReward({ snapshot, action: "ENTER", patterns: [oldPattern], recencyDecayDays: 30 });
-    expect(recNew.expectedReward).toBeGreaterThan(recOld.expectedReward);
+    assert.ok(recNew.expectedReward > recOld.expectedReward);
   });
 
   it("does not issue arbitrary confidence scores", () => {
@@ -163,7 +169,7 @@ describe("contextual learner", () => {
     const rewards = snapshots.map((s) => computeReward(s, makeOutcome(5)));
     const patterns = discoverPatterns({ snapshots, rewards, action: "ENTER" });
     const rec = recommendAction({ snapshot: createDecisionSnapshot(makeCtx()), patterns });
-    expect(rec.confidence).toBeLessThanOrEqual(1);
-    expect(rec.confidence).toBeGreaterThanOrEqual(0);
+    assert.ok(rec.confidence <= 1);
+    assert.ok(rec.confidence >= 0);
   });
 });

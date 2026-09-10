@@ -1,6 +1,6 @@
 import { clamp, num0 } from "../math.ts";
 import { rid } from "./snapshots.ts";
-import type { Contribution, DecisionSnapshot, FeatureAttribution, TradeOutcome, TradeReward } from "./types.ts";
+import type { Contribution, DecisionSnapshot, FeatureAttribution, LessonEvidence, TradeOutcome, TradeReward } from "./types.ts";
 
 type FeatureRule = {
   name: string;
@@ -149,7 +149,7 @@ export function extractLesson(
   snapshot: DecisionSnapshot,
   reward: TradeReward,
   attributions: FeatureAttribution[],
-): { title: string; body: string; confidence: "HIGH" | "MODERATE" | "LOW" | "INSUFFICIENT_EVIDENCE"; evidence: Record<string, unknown> } {
+): { title: string; body: string; confidence: "HIGH" | "MODERATE" | "LOW" | "INSUFFICIENT_EVIDENCE"; evidence: LessonEvidence } {
   const negative = attributions.filter((a) => a.contribution === "NEGATIVE" || a.contribution === "STRONGLY_NEGATIVE");
   const positive = attributions.filter((a) => a.contribution === "POSITIVE" || a.contribution === "STRONGLY_POSITIVE");
   const goodDecision = reward.decisionOutcomeClass === "GOOD_GOOD" || reward.decisionOutcomeClass === "GOOD_BAD";

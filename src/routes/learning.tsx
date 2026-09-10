@@ -111,13 +111,13 @@ function LearningPage() {
                   <p className="text-sm text-muted-foreground">No strong positive trades yet.</p>
                 ) : (
                   data.goodTrades.slice(0, 10).map((t) => (
-                    <div key={t.reward.id} className="rounded-xl border border-border bg-card p-4">
+                    <div key={t.id} className="rounded-xl border border-border bg-card p-4">
                       <div className="flex items-center justify-between gap-3">
                         <p className="font-medium">{t.snapshot.symbol}</p>
-                        <Badge variant="up">{t.reward.totalReward.toFixed(2)}</Badge>
+                        <Badge variant="up">{t.totalReward.toFixed(2)}</Badge>
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        Return {t.outcome.realizedReturnPct.toFixed(2)}% · {t.reward.decisionOutcomeClass}
+                        Return {t.outcome.realizedReturnPct.toFixed(2)}% · {t.decisionOutcomeClass}
                       </p>
                       {t.attributions.length ? (
                         <div className="mt-2 flex flex-wrap gap-1">
@@ -144,13 +144,13 @@ function LearningPage() {
                   <p className="text-sm text-muted-foreground">No strong negative trades yet.</p>
                 ) : (
                   data.badTrades.slice(0, 10).map((t) => (
-                    <div key={t.reward.id} className="rounded-xl border border-border bg-card p-4">
+                    <div key={t.id} className="rounded-xl border border-border bg-card p-4">
                       <div className="flex items-center justify-between gap-3">
                         <p className="font-medium">{t.snapshot.symbol}</p>
-                        <Badge variant="down">{t.reward.totalReward.toFixed(2)}</Badge>
+                        <Badge variant="down">{t.totalReward.toFixed(2)}</Badge>
                       </div>
                       <p className="mt-1 text-xs text-muted-foreground">
-                        Return {t.outcome.realizedReturnPct.toFixed(2)}% · {t.reward.avoidableLoss ?? "unknown"} · {t.reward.decisionOutcomeClass}
+                        Return {t.outcome.realizedReturnPct.toFixed(2)}% · {t.avoidableLoss ?? "unknown"} · {t.decisionOutcomeClass}
                       </p>
                       {t.attributions.length ? (
                         <div className="mt-2 flex flex-wrap gap-1">
