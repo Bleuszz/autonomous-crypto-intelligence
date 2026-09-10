@@ -3,6 +3,7 @@ import {
   Activity,
   Beaker,
   BookOpen,
+  Brain,
   Briefcase,
   CalendarDays,
   Landmark,
@@ -44,6 +45,7 @@ const NAV = [
     label: "Desk",
     items: [
       { to: "/paper", label: "Paper desk", icon: Briefcase },
+      { to: "/learning", label: "Learning", icon: Brain },
       { to: "/backtests", label: "Backtests", icon: Beaker },
       { to: "/strategies", label: "Strategies", icon: ShieldAlert },
       { to: "/system", label: "System", icon: Siren },

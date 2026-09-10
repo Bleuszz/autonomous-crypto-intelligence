@@ -68,6 +68,23 @@ import {
   type PolymarketTrade,
   type WalletPerformanceV2,
 } from "./wallet-intelligence";
+import {
+  buildDataQuality,
+  buildSizing,
+  computeFeatureAttributions,
+  computeReward,
+  ensureLearnerVersion,
+  extractLesson,
+  getLearnerRecommendation,
+  getLearningDashboard,
+  recordDecisionSnapshot,
+  recordOutcomeFromFills,
+  rid as learningRid,
+  runLearningJobs,
+  type DecisionContext,
+  type LearnerRecommendation,
+  type LearningDashboard,
+} from "./learning/index.ts";
 import { runResearch } from "./research";
 import { loadRuntimeSecrets } from "./secrets";
 import { startDeskScheduler } from "./scheduler";
@@ -323,13 +340,13 @@ function rowAsset(r: Record<string, unknown>): AssetRow {
 
 async function applySell(opts: {
   sql: Sql;
-  pos: { id: unknown; asset_id: string; qty: number; avg_price: number };
+  pos: { id: unknown; asset_id: string; qty: number; avg_price: number; opened_at?: string };
   r: RankedOpportunity | undefined;
   mark: number;
   intent: TradeIntent;
   cash: number;
   realized: number;
-}): Promise<{ cash: number; realized: number; closed: boolean }> {
+}): Promise<{ cash: number; realized: number; closed: boolean; fill: { qty: number; price: number; notionalUsd: number; feeUsd: number; gasUsd: number; slippageBps: number; latencyMs: number; model: string } | null; sellQty: number; entryPrice: number; realizedPnlUsd: number; openedAt: string | null }> {
   const { sql, pos, r, mark, intent } = opts;
   let { cash, realized } = opts;
   const frac = clamp01(intent.fraction);
@@ -345,7 +362,7 @@ async function applySell(opts: {
     gasUsd: gasForChain(r?.asset.chainId),
     seed: `exit:${pos.asset_id}:${intent.strategyId}:${Date.now()}`,
   });
-  if (!fill.ok) return { cash, realized, closed: false };
+  if (!fill.ok) return { cash, realized, closed: false, fill: null, sellQty: 0, entryPrice: opts.pos.avg_price, realizedPnlUsd: 0, openedAt: opts.pos.opened_at ?? null };
   const proceeds = fill.qty * fill.price - fill.feeUsd - fill.gasUsd;
   const costBasis = qty * pos.avg_price;
   cash += proceeds;
@@ -361,17 +378,120 @@ async function applySell(opts: {
      values ($1,$2,$3,$4,'sell',$5,$6,$7,$8,$9,$10,now(),$11)`,
     [rid(), oid, DEFAULT_PORTFOLIO_ID, pos.asset_id, fill.qty, fill.price, fill.notionalUsd, fill.feeUsd, fill.slippageBps, fill.gasUsd, fill.model],
   );
+  const openedAt = opts.pos.opened_at ?? nowIso();
   if (frac >= 0.999) {
     await sql.query("delete from positions where id = $1", [pos.id]);
-    return { cash, realized, closed: true };
+    return { cash, realized, closed: true, fill, sellQty: qty, entryPrice: opts.pos.avg_price, realizedPnlUsd: proceeds - costBasis, openedAt };
   }
   await sql.query("update positions set qty = qty - $2, updated_at = now() where id = $1", [pos.id, fill.qty]);
-  return { cash, realized, closed: false };
+  return { cash, realized, closed: false, fill, sellQty: qty, entryPrice: opts.pos.avg_price, realizedPnlUsd: proceeds - costBasis, openedAt };
 }
 
 function clamp01(n: number): number {
   if (!Number.isFinite(n)) return 1;
   return Math.min(1, Math.max(0.05, n));
+}
+
+async function latestOpenEntrySnapshot(sql: Sql, assetId: string): Promise<string | null> {
+  const rows = await sql.query<{ id: string }>(
+    `select s.id from trade_decision_snapshots s
+     where s.asset_id = $1 and s.decision = 'ENTER' and s.side = 'buy'
+       and not exists (select 1 from trade_outcomes o where o.decision_snapshot_id = s.id)
+     order by s.action_at desc limit 1`,
+    [assetId],
+  );
+  return rows[0]?.id ?? null;
+}
+
+function entrySnapshotContext(
+  r: RankedOpportunity,
+  intent: TradeIntent,
+  fill: { qty: number; price: number; notionalUsd: number; feeUsd: number; gasUsd: number; slippageBps: number; latencyMs: number; model: string },
+  gate: { ok: boolean; reasons: string[] },
+  equity: number,
+  cash: number,
+  dayAnchor: number,
+  signalId?: string,
+  orderId?: string,
+  learnerRec?: LearnerRecommendation | null,
+): DecisionContext {
+  const sizing = {
+    equityUsd: equity,
+    cashUsd: cash,
+    requestedNotionalUsd: fill.notionalUsd,
+    approvedNotionalUsd: fill.notionalUsd,
+    positionSizePct: equity > 0 ? fill.notionalUsd / equity : 0,
+  };
+  const exec = {
+    latencyMs: fill.latencyMs,
+    feeBps: 30,
+    baseSlippageBps: fill.slippageBps,
+    model: fill.model,
+    expectedFillPrice: fill.price,
+  };
+  const freshness: "NEW" | "RECENT" | "STALE" | "UNKNOWN" =
+    (r.asset.dataAgeMs ?? Infinity) < 60_000 ? "NEW" : (r.asset.dataAgeMs ?? Infinity) < 300_000 ? "RECENT" : "STALE";
+  const dataQuality = buildDataQuality({
+    priceFresh: freshness === "NEW" || freshness === "RECENT",
+    dataAgeMs: r.asset.dataAgeMs,
+    sourceReliability: r.asset.sourceReliability,
+    source: r.asset.source,
+    stalenessFlags: freshness === "STALE" ? ["price_stale"] : [],
+  });
+  const riskState = {
+    positionPctOfEquity: sizing.positionSizePct,
+    tokenConcentrationPct: sizing.positionSizePct,
+    chainExposurePct: sizing.positionSizePct,
+    liquidityTakePct: 0,
+    slippageBps: fill.slippageBps,
+    dailyLossUsedPct: equity > 0 ? Math.abs(equity - dayAnchor) / equity : 0,
+    hardLimitsHit: gate.ok ? [] : gate.reasons,
+  };
+  return {
+    assetId: r.asset.id,
+    symbol: r.asset.symbol,
+    decision: "ENTER",
+    side: "buy",
+    strategyId: intent.strategyId,
+    strategyVersion: "2.0.0",
+    signalId: signalId ?? null,
+    orderId: orderId ?? null,
+    ranked: r,
+    intent,
+    sizing,
+    execution: exec,
+    dataQuality,
+    learnerRecommendation: learnerRec ?? null,
+    confidence: intent.confidence,
+    notes: `Learner ${learnerRec ? learnerRec.action : "not consulted"}; gate ${gate.ok ? "ok" : "rejected"}`,
+  };
+}
+
+function exitSnapshotContext(
+  r: RankedOpportunity | undefined,
+  intent: TradeIntent,
+  fill: { qty: number; price: number; notionalUsd: number; feeUsd: number; gasUsd: number; slippageBps: number; latencyMs: number; model: string },
+): DecisionContext {
+  return {
+    assetId: intent.assetId,
+    symbol: intent.symbol,
+    decision: "EXIT",
+    side: "sell",
+    strategyId: intent.strategyId,
+    strategyVersion: "2.0.0",
+    ranked: r,
+    intent,
+    execution: {
+      latencyMs: fill.latencyMs,
+      feeBps: 30,
+      baseSlippageBps: fill.slippageBps,
+      model: fill.model,
+      expectedFillPrice: fill.price,
+    },
+    dataQuality: buildDataQuality({ priceFresh: true, dataAgeMs: null, sourceReliability: 0.7, source: null, stalenessFlags: [] }),
+    confidence: intent.confidence,
+    notes: `Exit via ${intent.reason}`,
+  };
 }
 
 async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalDTO[], regime: RegimeInput) {
@@ -425,7 +545,7 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
     const r = ranked.find((x) => x.asset.id === intent.assetId);
     const res = await applySell({
       sql,
-      pos: { id: pos.id, asset_id: String(pos.asset_id), qty: num0(pos.qty), avg_price: num0(pos.avg_price) },
+      pos: { id: pos.id, asset_id: String(pos.asset_id), qty: num0(pos.qty), avg_price: num0(pos.avg_price), opened_at: String(pos.opened_at ?? nowIso()) },
       r,
       mark,
       intent,
@@ -435,6 +555,127 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
     cash = res.cash;
     realized = res.realized;
     if (res.closed) exited.add(intent.assetId);
+    // Learning: record EXIT decision snapshot and, when fully closed, round-trip outcome + reward.
+    if (res.fill) {
+      try {
+        const exitCtx = exitSnapshotContext(r, intent, res.fill);
+        await recordDecisionSnapshot(sql, exitCtx);
+        if (res.closed) {
+          const entryId = await latestOpenEntrySnapshot(sql, intent.assetId);
+          if (entryId) {
+            const holdingSeconds = (Date.now() - new Date(res.openedAt ?? nowIso()).getTime()) / 1000;
+            const outcome = await recordOutcomeFromFills(sql, {
+              entrySnapshotId: entryId,
+              assetId: intent.assetId,
+              entryPrice: res.entryPrice,
+              exitPrice: res.fill.price,
+              qty: res.sellQty,
+              realizedPnlUsd: res.realizedPnlUsd,
+              feesUsd: res.fill.feeUsd,
+              gasUsd: res.fill.gasUsd,
+              slippageBps: res.fill.slippageBps,
+              holdingSeconds,
+              exitReason: intent.reason,
+              stopHit: intent.strategyId === "exit_stop_v2",
+              targetHit: intent.strategyId === "exit_take_v2",
+            });
+            // Fetch the entry snapshot to compute reward and attribution.
+            const snapRows = await sql.query<{
+              id: string;
+              features: string;
+              market_structure: string;
+              regime: string;
+              evidence: string;
+              risk_state: string;
+              sizing: string | null;
+              execution_assumptions: string | null;
+              data_quality: string;
+              expected_value: number | null;
+              confidence: number | null;
+              learner_recommendation: string | null;
+              notes: string | null;
+              asset_id: string;
+              symbol: string;
+              decision: string;
+              side: string | null;
+              action_at: string;
+              strategy_id: string;
+              strategy_version: string;
+              learner_version: string;
+              signal_id: string | null;
+              order_id: string | null;
+              portfolio_id: string;
+            }>(
+              `select * from trade_decision_snapshots where id = $1`,
+              [entryId],
+            );
+            const snapRow = snapRows[0];
+            if (snapRow) {
+              const snapshot: DecisionSnapshot = {
+                id: snapRow.id,
+                portfolioId: snapRow.portfolio_id,
+                assetId: snapRow.asset_id,
+                symbol: snapRow.symbol,
+                decision: snapRow.decision as DecisionSnapshot["decision"],
+                side: snapRow.side as DecisionSnapshot["side"],
+                actionAt: snapRow.action_at,
+                strategyId: snapRow.strategy_id,
+                strategyVersion: snapRow.strategy_version,
+                learnerVersion: snapRow.learner_version,
+                signalId: snapRow.signal_id,
+                orderId: snapRow.order_id,
+                features: JSON.parse(snapRow.features) as DecisionSnapshot["features"],
+                marketStructure: JSON.parse(snapRow.market_structure) as DecisionSnapshot["marketStructure"],
+                regime: JSON.parse(snapRow.regime) as Record<string, unknown>,
+                evidence: JSON.parse(snapRow.evidence) as DecisionSnapshot["evidence"],
+                riskState: JSON.parse(snapRow.risk_state) as DecisionSnapshot["riskState"],
+                sizing: snapRow.sizing ? (JSON.parse(snapRow.sizing) as DecisionSnapshot["sizing"]) : null,
+                executionAssumptions: snapRow.execution_assumptions ? (JSON.parse(snapRow.execution_assumptions) as DecisionSnapshot["executionAssumptions"]) : null,
+                dataQuality: JSON.parse(snapRow.data_quality) as DecisionSnapshot["dataQuality"],
+                expectedValue: snapRow.expected_value,
+                confidence: snapRow.confidence,
+                learnerRecommendation: snapRow.learner_recommendation ? (JSON.parse(snapRow.learner_recommendation) as DecisionSnapshot["learnerRecommendation"]) : null,
+                notes: snapRow.notes,
+                createdAt: snapRow.action_at,
+              };
+              const reward = computeReward(snapshot, outcome);
+              await sql.query(
+                `insert into trade_rewards (
+                   id, outcome_id, decision_snapshot_id, total_reward, outcome_quality, decision_quality, execution_quality,
+                   risk_discipline, drawdown_penalty, slippage_penalty, fee_penalty, contradiction_penalty, avoidable_loss,
+                   decision_outcome_class, version
+                 ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+                [
+                  reward.id, reward.outcomeId, reward.decisionSnapshotId, reward.totalReward, reward.components.outcomeQuality,
+                  reward.components.decisionQuality, reward.components.executionQuality, reward.components.riskDiscipline,
+                  reward.components.drawdownPenalty, reward.components.slippagePenalty, reward.components.feePenalty,
+                  reward.components.contradictionPenalty, reward.avoidableLoss, reward.decisionOutcomeClass, reward.version,
+                ],
+              );
+              const attributions = computeFeatureAttributions(snapshot, outcome, reward.id);
+              for (const a of attributions) {
+                await sql.query(
+                  `insert into feature_attributions (id, reward_id, feature_name, contribution, conditional_expectancy, evidence)
+                   values ($1,$2,$3,$4,$5,$6)
+                   on conflict (reward_id, feature_name) do nothing`,
+                  [a.id, a.rewardId, a.featureName, a.contribution, a.conditionalExpectancy, a.evidence],
+                );
+              }
+              const lesson = extractLesson(snapshot, reward, attributions);
+              await sql.query(
+                `insert into lesson_registry (id, pattern_id, trade_reward_id, lesson_type, title, body, evidence, confidence)
+                 values ($1, null, $2, $3, $4, $5, $6::jsonb, $7)`,
+                [learningRid(), reward.id, reward.totalReward >= 0 ? "POSITIVE" : "NEGATIVE", lesson.title, lesson.body, JSON.stringify(lesson.evidence), lesson.confidence],
+              );
+            }
+          }
+        }
+      } catch (e) {
+        if (process.env.NODE_ENV !== "production") {
+          console.error("[learning] failed to record exit/outcome:", e instanceof Error ? e.message : e);
+        }
+      }
+    }
     await sql.query(
       `insert into alerts (id, kind, severity, title, body, asset_id, created_at, channel)
        values ($1,'paper_trade','info',$2,$3,$4,now(),'in-app')`,
@@ -548,6 +789,18 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
       /* optional columns */
     }
     held.add(intent.assetId);
+    // Learning: record ENTER decision snapshot (shadow learner consulted before acting).
+    try {
+      const baseCtx = entrySnapshotContext(r, intent, fill, gate, equity, cash, dayAnchor, null, oid, null);
+      const learnerRec = await getLearnerRecommendation(sql, baseCtx);
+      const ctx = entrySnapshotContext(r, intent, fill, gate, equity, cash, dayAnchor, null, oid, learnerRec.recommendation);
+      await recordDecisionSnapshot(sql, ctx);
+    } catch (e) {
+      /* learning schema may not be ready; do not break paper trading */
+      if (process.env.NODE_ENV !== "production") {
+        console.error("[learning] failed to record entry snapshot:", e instanceof Error ? e.message : e);
+      }
+    }
     await sql.query(
       `insert into alerts (id, kind, severity, title, body, asset_id, created_at, channel)
        values ($1,'paper_trade','info',$2,$3,$4,now(),'in-app')`,
@@ -736,6 +989,11 @@ function parseJsonArray(v: unknown): string[] {
 async function ingestOnce(): Promise<void> {
   await loadRuntimeSecrets();
   const sql = await getSql();
+  try {
+    await ensureLearnerVersion(sql);
+  } catch {
+    /* learning schema may not exist in older deployments */
+  }
   const runId = rid();
   const t0 = Date.now();
   await sql.query(`insert into ingest_runs (id, started_at, status) values ($1, now(), 'running')`, [runId]);
@@ -1216,6 +1474,11 @@ async function ingestOnce(): Promise<void> {
       mempoolFastSatVb: extras.mempoolFastSatVb,
     };
     await paperTick(sql, ranked, signalDto, regime);
+    try {
+      await runLearningJobs(sql);
+    } catch (e) {
+      errors.push(`learning jobs: ${e instanceof Error ? e.message : "fail"}`);
+    }
     const portfolio = await assemblePortfolio(sql, ranked);
     const sources = await sql.query<Record<string, unknown>>("select * from source_health order by source");
 
@@ -1390,6 +1653,10 @@ export async function getWallets(): Promise<{ wallets: WalletDTO[]; txs: WalletT
 }
 export async function getPaper(): Promise<PortfolioDTO> {
   return (await ensureIngested(false)).portfolio;
+}
+export async function getLearningDashboardData(): Promise<LearningDashboard> {
+  await ensureIngested(false);
+  return getLearningDashboard();
 }
 export async function getSystem(): Promise<SystemDTO> {
   const o = await ensureIngested(false);

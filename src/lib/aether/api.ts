@@ -3,6 +3,7 @@ import {
   ensureIngested,
   getCopySignals,
   getDetectedEvents,
+  getLearningDashboardData,
   getNews,
   getOpportunities,
   getOverview,
@@ -92,6 +93,10 @@ export const postBacktest = createServerFn({ method: "POST" })
 
 export const fetchBacktests = createServerFn({ method: "GET" }).handler(async () => {
   return listBacktests();
+});
+
+export const fetchLearningDashboard = createServerFn({ method: "GET" }).handler(async () => {
+  return getLearningDashboardData();
 });
 
 export const postPaperTrade = createServerFn({ method: "POST" })
