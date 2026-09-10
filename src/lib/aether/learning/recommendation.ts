@@ -48,3 +48,29 @@ export function predictionStatus(opts: {
   if (!opts.resolved) return "UNRESOLVED";
   return "OK";
 }
+
+export function predictionFromRecommendationField(
+  raw: unknown,
+  actualReward: number | null,
+): {
+  recommendation: LearnerRecommendation;
+  parsed: LearnerRecommendation | null;
+  predictedAction: DecisionAction;
+  confidence: number;
+  expectedReward: number;
+  resolved: boolean;
+  status: "UNRESOLVED" | "NO DATA" | "OK";
+} {
+  const parsed = parseLearnerRecommendation(raw);
+  const recommendation = parsed ?? coerceLearnerRecommendation(raw);
+  const resolved = actualReward !== null;
+  return {
+    recommendation,
+    parsed,
+    predictedAction: recommendation.action,
+    confidence: recommendation.confidence,
+    expectedReward: recommendation.expectedReward,
+    resolved,
+    status: predictionStatus({ resolved, recommendation: parsed }),
+  };
+}

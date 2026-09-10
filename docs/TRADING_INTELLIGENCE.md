@@ -24,7 +24,8 @@ RAW MARKET DATA
 - Indicators only use candles with `close time <= decision timestamp`.
 - Missing book / CVD / walls / liquidations are `UNAVAILABLE`, never `0`.
 - Hard risk, stale-data, liquidity, exposure, drawdown and capital gates stay authoritative.
-- Technical evidence may veto or delay a buy (`WAIT` / `REJECT`). It never invents an entry the desk did not propose.
+- Technical evidence may veto or delay a buy when conflict or opposing structure is explicit (`WAIT` / `REJECT`).
+- Thin tapes (`NO DATA`, `INSUFFICIENT EVIDENCE`) do **not** invent an entry and do **not** block the existing paper desk.
 - Ablation and walk-forward helpers report `INSUFFICIENT EVIDENCE` when the sample is too small. This build does not claim that RSI or any other indicator improves expectancy.
 
 ## Indicators
@@ -43,4 +44,4 @@ Complementary set only: RSI, MACD, EMA-21, SMA-20, ATR-14, Bollinger 20/2, VWAP 
 
 ## Learning dashboard reliability
 
-`learner_recommendation` JSON-null / missing `action` is coerced to `WAIT` + `NO DATA` in `src/lib/aether/learning/recommendation.ts`. Wire `loadLearnerPredictions` through `coerceLearnerRecommendation` so a single malformed snapshot cannot crash `/learning`.
+`learner_recommendation` JSON-null / missing `action` is coerced to `WAIT` + `NO DATA` in `src/lib/aether/learning/recommendation.ts`. `loadLearnerPredictions` maps every row through `mapLearnerPredictionRow` → `coerceLearnerRecommendation` so a single malformed snapshot cannot crash `/learning`.
