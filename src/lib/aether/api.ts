@@ -22,6 +22,7 @@ import {
   placeManualPaperTrade,
   runBacktestJob,
   runTokenResearch,
+  getTrainingDashboardData,
 } from "./ingest";
 
 export const fetchOverview = createServerFn({ method: "GET" }).handler(async () => {
@@ -120,4 +121,8 @@ export const postPaperTrade = createServerFn({ method: "POST" })
 
 export const fetchXIntelligence = createServerFn({ method: "GET" }).handler(async () => {
   return getXIntelligenceDashboard();
+});
+
+export const fetchTrainingDashboard = createServerFn({ method: "GET" }).handler(async () => {
+  return getTrainingDashboardData();
 });

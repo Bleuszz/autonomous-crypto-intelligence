@@ -108,6 +108,21 @@ describe("reward engine", () => {
     assert.ok(reward.components.outcomeQuality < 0);
   });
 
+  it("uses the later outcome prices, not the contemporaneous mark", () => {
+    const snap = makeSnapshot("ENTER", "buy", { priceUsd: 60_000, change1hPct: 8, change24hPct: 12 });
+    const laterLoss = makeOutcome({
+      entryPrice: 60_000,
+      exitPrice: 52_000,
+      realizedReturnPct: -13.3,
+      realizedPnlUsd: -8000,
+      maePct: -14,
+      mfePct: 0.4,
+      holdingSeconds: 8 * 3600,
+    });
+    const reward = computeReward(snap, laterLoss);
+    assert.ok(reward.totalReward < 0, "a later dump must not be scored as a win just because the print looked green at signal time");
+  });
+
   it("marks avoidable losses when evidence is weak", () => {
     const snap = makeSnapshot("ENTER", "buy", { change7dPct: -15, change24hPct: -5, sparkline7d: [60_000, 55_000, 50_000] }, 0.3, 0.3);
     const out = makeOutcome({ exitPrice: 57_000, realizedReturnPct: -5, maePct: -8 });

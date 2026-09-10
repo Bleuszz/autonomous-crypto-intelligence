@@ -70,6 +70,15 @@ export type RankedOpportunity = {
   components: ScoreComponents;
   reasons: string[];
   riskReasons: string[];
+  dataQuality?: {
+    score: number;
+    sourceConflict: boolean;
+    delayed: boolean;
+    stale: boolean;
+    fakeMoveSuspected: boolean;
+    blockEntry: boolean;
+    flags: string[];
+  };
 };
 
 export type SignalDTO = {

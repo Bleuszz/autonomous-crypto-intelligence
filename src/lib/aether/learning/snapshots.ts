@@ -152,6 +152,11 @@ export function buildDataQuality(opts: {
   sourceReliability: number;
   source: string | null;
   stalenessFlags: string[];
+  score?: number;
+  sourceConflict?: boolean;
+  delayed?: boolean;
+  fakeMoveSuspected?: boolean;
+  learningWeight?: number;
 }): DataQuality {
   return {
     priceFresh: opts.priceFresh,
@@ -159,6 +164,11 @@ export function buildDataQuality(opts: {
     sourceReliability: clamp(num0(opts.sourceReliability), 0, 1),
     source: opts.source,
     stalenessFlags: opts.stalenessFlags,
+    score: opts.score,
+    sourceConflict: opts.sourceConflict,
+    delayed: opts.delayed,
+    fakeMoveSuspected: opts.fakeMoveSuspected,
+    learningWeight: opts.learningWeight,
   };
 }
 
@@ -210,6 +220,7 @@ export function createDecisionSnapshot(
     : { htfTrend: "neutral", priceVs7dHigh: "mid", volatilityRegime: "low" };
 
   const regimeObj = ctx.regime ? (ctx.regime as { label?: string; fearGreed?: number | null }) : {};
+  const actionAt = ctx.actionAt ?? nowIso();
 
   return {
     id: rid(),
@@ -219,7 +230,7 @@ export function createDecisionSnapshot(
     decision: ctx.decision,
     baselineAction: ctx.baselineAction ?? ctx.decision ?? null,
     side: ctx.side ?? null,
-    actionAt: ctx.actionAt ?? nowIso(),
+    actionAt,
     strategyId: ctx.strategyId,
     strategyVersion: ctx.strategyVersion,
     learnerVersion: defaultLearnerVersion,
@@ -260,6 +271,14 @@ export function createDecisionSnapshot(
     learnerRecommendation: ctx.learnerRecommendation ?? null,
     notes: ctx.notes ?? null,
     createdAt: nowIso(),
+    latestMarketDataTimestamp: ctx.latestMarketDataTimestamp ?? null,
+    latestNewsTimestamp: ctx.latestNewsTimestamp ?? null,
+    latestSocialTimestamp: ctx.latestSocialTimestamp ?? null,
+    latestEventTimestamp: ctx.latestEventTimestamp ?? null,
+    analysisTimestamp: ctx.analysisTimestamp ?? actionAt,
+    capitalProfile: ctx.capitalProfile ?? null,
+    executableAt100: ctx.executableAt100,
+    lookaheadClean: ctx.lookaheadClean ?? true,
   };
 }
 
@@ -276,7 +295,22 @@ export function updateSnapshotEvidence(
 }
 
 export function validateNoLookAhead(snapshot: DecisionSnapshot, outcomeTime: string): boolean {
-  return new Date(snapshot.actionAt).getTime() <= new Date(outcomeTime).getTime();
+  const action = new Date(snapshot.actionAt).getTime();
+  const outcome = new Date(outcomeTime).getTime();
+  if (!(action <= outcome)) return false;
+  const checks = [
+    snapshot.latestMarketDataTimestamp,
+    snapshot.latestNewsTimestamp,
+    snapshot.latestSocialTimestamp,
+    snapshot.latestEventTimestamp,
+    snapshot.analysisTimestamp,
+  ];
+  for (const c of checks) {
+    if (!c) continue;
+    const t = Date.parse(c);
+    if (Number.isFinite(t) && t > action) return false;
+  }
+  return snapshot.lookaheadClean !== false;
 }
 
 export function actionFromIntent(side: "buy" | "sell" | undefined, passedRisk: boolean): DecisionAction {

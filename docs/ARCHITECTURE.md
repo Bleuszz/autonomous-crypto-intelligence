@@ -31,13 +31,14 @@ ingest (HTTP sources, retries, health)
 | `events.ts` | monitored-entity event detection from news/Polymarket |
 | `wallet-intelligence.ts` | Polymarket wallet scoring + paper-only copy signals |
 | `learning/*` | reward engine, pattern discovery, shadow-mode contextual learner, champion/challenger promotion |
+| `capital.ts` / `replay.ts` / `data-quality.ts` / `training.ts` | dual capital profiles, historical replay training loop, 0–100 data-quality gate, £100 deployment gate |
 | `live.ts` | fail-closed live gates (hard-disabled) |
 | `research.ts` | user-initiated LLM, sectioned output |
 | `ingest.ts` | orchestration + persistence |
 
 ## Data
 
-Schema lives in `migrations/0002_aether.sql`, `0003_desk_upgrade.sql`, `0004_events_wallet_intelligence.sql`, and `0005_learning_engine.sql`. Preview uses embedded PGLite; production uses Neon/Postgres via `DATABASE_URL`. Rows are unowned (no accounts). Do not store personal data or secrets in them.
+Schema lives in `migrations/0002_aether.sql` through `0010_training_upgrade.sql`. Preview uses embedded PGLite; production uses Neon/Postgres via `DATABASE_URL`. Rows are unowned (no accounts). Do not store personal data or secrets in them.
 
 Every time-sensitive record carries `observed_at` / `source_timestamp` / `ingested_at` as available. Freshness is a feature, not a footnote.
 

@@ -58,6 +58,12 @@ export const PAPER_FEES = {
   latencyMsMax: 9000,
 } as const;
 
+/** Research laboratory book (GBP). Not a claim about the user's real capital. */
+export const PAPER_RESEARCH_EQUITY_GBP = 100_000;
+/** Realistic deployment gate. */
+export const PAPER_REALISTIC_EQUITY_GBP = 100;
+export const DATA_QUALITY_ENTRY_FLOOR = 55;
+
 /** Request-path cache. Scheduler polls independently. */
 export const INGEST_TTL_MS = 150_000;
 /** Background desk poll — public providers only; X is gated separately. */

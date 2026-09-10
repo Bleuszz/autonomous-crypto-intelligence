@@ -6,6 +6,7 @@ import {
   Brain,
   Briefcase,
   CalendarDays,
+  GraduationCap,
   Landmark,
   LayoutDashboard,
   Menu,
@@ -48,6 +49,7 @@ const NAV = [
     items: [
       { to: "/paper", label: "Paper desk", icon: Briefcase },
       { to: "/learning", label: "Learning", icon: Brain },
+      { to: "/training", label: "Training lab", icon: GraduationCap },
       { to: "/backtests", label: "Backtests", icon: Beaker },
       { to: "/strategies", label: "Strategies", icon: ShieldAlert },
       { to: "/system", label: "System", icon: Siren },

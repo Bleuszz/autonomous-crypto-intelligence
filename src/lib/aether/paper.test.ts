@@ -32,6 +32,21 @@ describe("paper fills", () => {
     assert.equal(fill.ok, false);
   });
 
+  it("refuses giant fills versus 24h volume", () => {
+    const fill = simulateFill({
+      side: "buy",
+      mid: 1,
+      notionalUsd: 50_000,
+      liquidityUsd: 5_000_000,
+      volume24hUsd: 200_000,
+      volatilityPct: 5,
+      latencyMs: 2000,
+      seed: "giant-vol",
+    });
+    assert.equal(fill.ok, false);
+    assert.match(fill.rejectReason ?? "", /volume/i);
+  });
+
   it("caps size by liquidity take", () => {
     const size = positionSizeUsd(10_000, 0.9, 0.1, 50_000, 0.02);
     assert.ok(size <= 1000);

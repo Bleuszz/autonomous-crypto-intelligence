@@ -242,17 +242,22 @@ Negative results and insufficient evidence are displayed explicitly.
 - Free data sources have rate limits, delays, and gaps that affect feature quality and learning speed.
 - The system does not claim profitability; it measures paper-only outcomes under modelled costs.
 - Walk-forward and OOS validation require a long enough history of decisions.
+- £100,000 research performance never overrides the £100 realistic-capital gate.
+- In-sample luck cannot replace the champion.
 
 ## Files
 
 - `src/lib/aether/learning/types.ts` — shared types
-- `src/lib/aether/learning/snapshots.ts` — immutable decision snapshots
-- `src/lib/aether/learning/reward.ts` — reward engine
-- `src/lib/aether/learning/attribution.ts` — feature attribution and lessons
+- `src/lib/aether/learning/snapshots.ts` — decision snapshots + look-ahead check
+- `src/lib/aether/learning/reward.ts` — reward engine (later outcomes, not contemporaneous marks)
+- `src/lib/aether/learning/attribution.ts` — feature attribution; X down-weighted vs events
 - `src/lib/aether/learning/patterns.ts` — pattern discovery with sample-size gating
 - `src/lib/aether/learning/learner.ts` — contextual learner (shadow mode)
-- `src/lib/aether/learning/promotion.ts` — champion/challenger validation and rollback
-- `src/lib/aether/learning/index.ts` — orchestration and database integration
-- `migrations/0005_learning_engine.sql` — schema
-- `src/routes/learning.tsx` — dashboard
-- `docs/LEARNING.md` — this document
+- `src/lib/aether/learning/promotion.ts` — champion/challenger; luck and capital gates
+- `src/lib/aether/learning/evidence.ts` — source-trust hierarchy
+- `src/lib/aether/learning/experiences.ts` — training-experience metadata and diversity
+- `src/lib/aether/learning/jobs.ts` — persistence for experiences, decay, scale runs
+- `src/lib/aether/capital.ts` / `replay.ts` / `data-quality.ts` / `training.ts` — capital profiles, historical replay loop, quality gate
+- `migrations/0005_learning_engine.sql` and `0010_training_upgrade.sql` — schema
+- `src/routes/learning.tsx` / `src/routes/training.tsx` — dashboards
+- `docs/LEARNING.md` / `docs/TRAINING.md` / `docs/DATA_QUALITY.md`

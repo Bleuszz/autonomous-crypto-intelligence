@@ -51,20 +51,28 @@ export function compareChallengerToChampion(
 ): {
   wins: number;
   total: number;
+  primaryWins: number;
+  primaryTotal: number;
   details: Record<string, { winner: "challenger" | "champion" | "tie"; delta: number }>;
 } {
-  const metrics: Array<{ key: string; higherIsBetter: boolean }> = [
-    { key: "totalReturnPct", higherIsBetter: true },
-    { key: "sharpe", higherIsBetter: true },
-    { key: "expectancy", higherIsBetter: true },
-    { key: "payoffRatio", higherIsBetter: true },
-    { key: "winRate", higherIsBetter: true },
-    { key: "calmar", higherIsBetter: true },
-    { key: "maxDrawdownPct", higherIsBetter: false },
+  // Primary: risk-adjusted, expectancy, drawdown, payoff, OOS. NOT profit or win rate alone.
+  const metrics: Array<{ key: string; higherIsBetter: boolean; primary: boolean }> = [
+    { key: "sharpe", higherIsBetter: true, primary: true },
+    { key: "expectancy", higherIsBetter: true, primary: true },
+    { key: "payoffRatio", higherIsBetter: true, primary: true },
+    { key: "calmar", higherIsBetter: true, primary: true },
+    { key: "maxDrawdownPct", higherIsBetter: false, primary: true },
+    { key: "oosExpectancy", higherIsBetter: true, primary: true },
+    { key: "oosSharpe", higherIsBetter: true, primary: true },
+    { key: "calibrationError", higherIsBetter: false, primary: true },
+    { key: "totalReturnPct", higherIsBetter: true, primary: false },
+    { key: "winRate", higherIsBetter: true, primary: false },
   ];
 
   const details: Record<string, { winner: "challenger" | "champion" | "tie"; delta: number }> = {};
   let wins = 0;
+  let primaryWins = 0;
+  let primaryTotal = 0;
   for (const m of metrics) {
     const cVal = challenger[m.key as keyof ChampionChallengerMetrics] as number | null | undefined;
     const chVal = champion[m.key as keyof ChampionChallengerMetrics] as number | null | undefined;
@@ -72,6 +80,10 @@ export function compareChallengerToChampion(
     const delta = m.higherIsBetter ? cVal - chVal : chVal - cVal;
     const winner = Math.abs(delta) < 0.001 ? "tie" : delta > 0 ? "challenger" : "champion";
     if (winner === "challenger") wins++;
+    if (m.primary) {
+      primaryTotal++;
+      if (winner === "challenger") primaryWins++;
+    }
     details[m.key] = { winner, delta };
   }
 
@@ -89,7 +101,7 @@ export function compareChallengerToChampion(
     }
   }
 
-  return { wins, total: Object.keys(details).length, details };
+  return { wins, total: Object.keys(details).length, details, primaryWins, primaryTotal };
 }
 
 export function canAdvanceStage(opts: {
@@ -181,3 +193,60 @@ export function championNeedsRollback(championMetrics: ChampionChallengerMetrics
   if (championMetrics.maxDrawdownPct > 15) return { rollback: true, reason: `Post-approval drawdown ${championMetrics.maxDrawdownPct.toFixed(1)}% exceeds 15%.` };
   return { rollback: false, reason: "Within post-approval tolerances." };
 }
+
+/**
+ * In-sample luck is not a promotion. Challenger must beat champion on a majority
+ * of primary (risk-adjusted / OOS / calibration) metrics. A higher backtest
+ * return or win rate alone is not enough. Capital-dependent behaviour is refused.
+ */
+export function inSampleLuckGuard(opts: {
+  inSampleExpectancy: number;
+  oosExpectancy: number | null;
+  inSampleSharpe: number;
+  oosSharpe: number | null;
+  uniqueDays: number;
+}): { ok: boolean; reason: string } {
+  if (opts.uniqueDays < 5) {
+    return { ok: false, reason: "Do not promote from one lucky period. Need ≥ 5 distinct sessions." };
+  }
+  if (opts.oosExpectancy == null || opts.oosSharpe == null) {
+    return { ok: false, reason: "INSUFFICIENT EVIDENCE: no out-of-sample metrics. In-sample return is not validation." };
+  }
+  if (opts.inSampleExpectancy > 0.5 && opts.oosExpectancy < opts.inSampleExpectancy * 0.3) {
+    return { ok: false, reason: "In-sample expectancy collapsed out of sample — likely luck, not an edge." };
+  }
+  if (opts.inSampleSharpe > 1 && (opts.oosSharpe ?? 0) < 0.2) {
+    return { ok: false, reason: "In-sample Sharpe did not survive walk-forward / OOS." };
+  }
+  if (opts.oosExpectancy < 0 && opts.inSampleExpectancy > 0) {
+    return { ok: false, reason: "Positive in-sample expectancy with negative OOS — champion stands." };
+  }
+  return { ok: true, reason: "OOS metrics do not contradict in-sample." };
+}
+
+export function wouldReplaceChampion(opts: {
+  challenger: ChampionChallengerMetrics;
+  champion: ChampionChallengerMetrics;
+  uniqueDays: number;
+}): { replace: boolean; reason: string } {
+  const luck = inSampleLuckGuard({
+    inSampleExpectancy: opts.challenger.expectancy,
+    oosExpectancy: opts.challenger.oosExpectancy ?? null,
+    inSampleSharpe: opts.challenger.sharpe,
+    oosSharpe: opts.challenger.oosSharpe ?? null,
+    uniqueDays: opts.uniqueDays,
+  });
+  if (!luck.ok) return { replace: false, reason: luck.reason };
+  if (opts.challenger.capitalClassification === "CAPITAL-DEPENDENT") {
+    return { replace: false, reason: "CAPITAL-SCALE DEPENDENT — NOT DEPLOYMENT READY. Champion stands." };
+  }
+  const cmp = compareChallengerToChampion(opts.challenger, opts.champion);
+  if (cmp.primaryTotal < 3) {
+    return { replace: false, reason: "INSUFFICIENT EVIDENCE on primary risk-adjusted metrics." };
+  }
+  if (cmp.primaryWins <= cmp.primaryTotal / 2) {
+    return { replace: false, reason: `Challenger wins ${cmp.primaryWins}/${cmp.primaryTotal} primary metrics. Profit/win-rate alone cannot replace the champion.` };
+  }
+  return { replace: true, reason: `Challenger wins ${cmp.primaryWins}/${cmp.primaryTotal} primary metrics and passes the luck / capital gates.` };
+}
+

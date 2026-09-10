@@ -11,6 +11,8 @@ export type FillModelInput = {
   feeBps?: number;
   gasUsd?: number;
   seed?: string;
+  volume24hUsd?: number;
+  maxVolumeTakePct?: number;
 };
 
 export type SimulatedFill = {
@@ -71,6 +73,25 @@ export function simulateFill(input: FillModelInput): SimulatedFill {
     return {
       ok: false,
       rejectReason: "Liquidity below executable threshold",
+      qty: 0,
+      price: 0,
+      requestedNotionalUsd,
+      notionalUsd: 0,
+      feeUsd: 0,
+      gasUsd: 0,
+      slippageBps: 0,
+      impactBps: 0,
+      latencyMs: input.latencyMs,
+      midAtSignal: mid,
+      midAtFill: mid,
+      model,
+    };
+  }
+  const volCap = input.maxVolumeTakePct ?? 0.02;
+  if (input.volume24hUsd != null && input.volume24hUsd > 0 && input.notionalUsd / input.volume24hUsd > volCap) {
+    return {
+      ok: false,
+      rejectReason: "Notional exceeds 24h volume take cap — no giant fills",
       qty: 0,
       price: 0,
       requestedNotionalUsd,

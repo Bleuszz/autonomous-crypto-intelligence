@@ -71,6 +71,20 @@ describe("paper engine", () => {
     assert.equal(isQualityPaperEntry(r, { strategyId: "social_proxy_v1", confidence: 0.9 }), false);
   });
 
+  it("blocks entries when data quality flags a fake move", () => {
+    const r = opp();
+    r.dataQuality = {
+      score: 22,
+      sourceConflict: true,
+      delayed: false,
+      stale: false,
+      fakeMoveSuspected: true,
+      blockEntry: true,
+      flags: ["unconfirmed_vertical_print"],
+    };
+    assert.equal(isQualityPaperEntry(r, { strategyId: "momentum_v2", confidence: 0.8 }), false);
+  });
+
   it("stops out a position that is down past the major stop", () => {
     const r = opp({ priceUsd: 100 });
     const exits = decideExits({

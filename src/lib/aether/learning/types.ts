@@ -90,6 +90,11 @@ export type DataQuality = {
   sourceReliability: number;
   source: string | null;
   stalenessFlags: string[];
+  score?: number;
+  sourceConflict?: boolean;
+  delayed?: boolean;
+  fakeMoveSuspected?: boolean;
+  learningWeight?: number;
 };
 
 export type LearnerRecommendation = {
@@ -121,6 +126,14 @@ export type DecisionContext = {
   dataQuality?: DataQuality;
   learnerRecommendation?: LearnerRecommendation | null;
   notes?: string;
+  latestMarketDataTimestamp?: string | null;
+  latestNewsTimestamp?: string | null;
+  latestSocialTimestamp?: string | null;
+  latestEventTimestamp?: string | null;
+  analysisTimestamp?: string | null;
+  capitalProfile?: string | null;
+  executableAt100?: boolean;
+  lookaheadClean?: boolean;
 };
 
 export type DecisionSnapshot = {
@@ -150,6 +163,14 @@ export type DecisionSnapshot = {
   learnerRecommendation: LearnerRecommendation | null;
   notes: string | null;
   createdAt: string;
+  latestMarketDataTimestamp?: string | null;
+  latestNewsTimestamp?: string | null;
+  latestSocialTimestamp?: string | null;
+  latestEventTimestamp?: string | null;
+  analysisTimestamp?: string | null;
+  capitalProfile?: string | null;
+  executableAt100?: boolean;
+  lookaheadClean?: boolean;
 };
 
 export type TradeOutcome = {
@@ -345,6 +366,10 @@ export type ChampionChallengerMetrics = {
   tradesByRegime: Record<string, { n: number; avgReturn: number }>;
   tradesByAsset: Record<string, { n: number; avgReturn: number }>;
   costSensitivity: Record<string, number>;
+  oosExpectancy?: number | null;
+  oosSharpe?: number | null;
+  calibrationError?: number | null;
+  capitalClassification?: "CAPITAL-INDEPENDENT" | "CAPITAL-SENSITIVE" | "CAPITAL-DEPENDENT" | "UNKNOWN";
 };
 
 export type LearnerOperatingState = {

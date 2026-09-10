@@ -40,6 +40,11 @@ import { buildDigest, digestKey, loadLatestDigestMeta, londonSlot, rememberDiges
 import { sanitizePublicError } from "./privacy";
 import { ageMs, formatAge, newsFreshness, nowIso } from "./time";
 import { num0 } from "./math";
+import { assessDataQuality, qualitySummary, type SourceQuote } from "./data-quality";
+import { RESEARCH_EQUITY_GBP, profileFromEnv } from "./capital";
+import { fetchGbpUsd } from "./fx";
+import { clusterEvents } from "./learning/events-cluster.ts";
+import { classifyLifecycle } from "./learning/survivorship.ts";
 import type {
   AssetRow,
   BacktestDTO,
@@ -94,6 +99,9 @@ import { runResearch } from "./research";
 import { loadRuntimeSecrets } from "./secrets";
 import { startDeskScheduler } from "./scheduler";
 import { getXIntelligence, startXMarketStream } from "./x-market-intelligence";
+import { getTrainingDashboard, persistEventDecayFromNews, runTrainingJobs } from "./training";
+import { persistTrainingExperience } from "./learning/jobs.ts";
+import { assignSplit, correlationGroup, qualityWeight, type TrainingExperience } from "./learning/experiences.ts";
 import {
   X_DAILY_CAP,
   X_SEARCH_QUERY,
@@ -134,6 +142,63 @@ function xUsageDto(budget: XBudgetState): XUsageDTO {
     lastError: sanitizePublicError(budget.lastError),
     tweetsPulledWeek: budget.tweetsPulled,
   };
+}
+
+async function persistLiveTrainingExperience(sql: Sql, opts: {
+  snapshotId?: string;
+  asset: string;
+  assetClass: string;
+  decision: "ENTER" | "WAIT" | "REJECT";
+  confidence: number | null;
+  qualityScore: number;
+  sourceConflict: boolean;
+  fakeMove: boolean;
+  executableAt100: boolean;
+  regime: string;
+  marketTs?: string | null;
+  newsTs?: string | null;
+}): Promise<void> {
+  const now = Date.now();
+  const exp: TrainingExperience = {
+    id: learningRid(),
+    capitalProfile: profileFromEnv(),
+    startingEquityGbp: RESEARCH_EQUITY_GBP,
+    availableEquityGbp: RESEARCH_EQUITY_GBP * 0.7,
+    positionSizeGbp: opts.decision === "ENTER" ? RESEARCH_EQUITY_GBP * 0.02 : null,
+    portfolioExposurePct: opts.decision === "ENTER" ? 0.02 : 0,
+    capitalUtilisationPct: opts.decision === "ENTER" ? 0.4 : 0,
+    regime: opts.regime,
+    asset: opts.asset,
+    assetClass: opts.assetClass,
+    marketStructure: "mid",
+    signalType: "live_paper",
+    dataQuality: opts.qualityScore,
+    sourceConflict: opts.sourceConflict,
+    eventClusterId: null,
+    decisionTimestamp: new Date(now).toISOString(),
+    latestMarketDataTimestamp: opts.marketTs ?? new Date(now).toISOString(),
+    latestNewsTimestamp: opts.newsTs ?? null,
+    latestSocialTimestamp: null,
+    latestEventTimestamp: null,
+    analysisTimestamp: new Date(now).toISOString(),
+    decision: opts.decision,
+    confidence: opts.confidence,
+    executableAt100: opts.executableAt100,
+    minimumRequiredCapitalGbp: null,
+    capitalSensitivity: "UNKNOWN",
+    outcome: "open",
+    reward: null,
+    learningWeight: qualityWeight(opts.qualityScore, opts.sourceConflict, opts.fakeMove),
+    split: assignSplit(now, { start: now - 90 * 86400_000, end: now + 1 }),
+    usedForTraining: false,
+    correlationGroup: correlationGroup(opts.asset, opts.regime),
+    lookaheadClean: true,
+    negativeExample: opts.fakeMove || opts.decision === "REJECT",
+    historicalReplay: false,
+    assetState: "ACTIVE",
+  };
+  exp.usedForTraining = exp.split === "TRAINING" && exp.lookaheadClean && exp.learningWeight >= 0.25;
+  await persistTrainingExperience(sql, exp, opts.snapshotId ?? null);
 }
 
 async function loadXBudget(sql: Sql): Promise<XBudgetState> {
@@ -363,6 +428,7 @@ async function applySell(opts: {
     mid: mark,
     notionalUsd: notional,
     liquidityUsd: r ? executableUsd(r) : 1_000_000,
+    volume24hUsd: r?.asset.volume24hUsd ?? undefined,
     volatilityPct: Math.abs(r?.asset.change24hPct ?? 5),
     latencyMs: pickLatencyMs(`exit:${pos.asset_id}:${intent.strategyId}`),
     gasUsd: gasForChain(r?.asset.chainId),
@@ -751,6 +817,7 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
       mid: r.asset.priceUsd,
       notionalUsd: size,
       liquidityUsd: executableUsd(r),
+      volume24hUsd: r.asset.volume24hUsd ?? undefined,
       volatilityPct: Math.abs(r.asset.change24hPct ?? 8),
       latencyMs: latency,
       gasUsd: gasForChain(r.asset.chainId),
@@ -841,6 +908,19 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
     try {
       const ctx = entrySnapshotContext(r, intent, fill, gate, equity, cash, dayAnchor, null, oid, learnerRec, "ENTER");
       await recordDecisionSnapshot(sql, ctx);
+      await persistLiveTrainingExperience(sql, {
+        snapshotId: ctx.orderId ?? oid,
+        asset: r.asset.symbol,
+        assetClass: r.asset.kind,
+        decision: "ENTER",
+        confidence: intent.confidence,
+        qualityScore: r.dataQuality?.score ?? 50,
+        sourceConflict: Boolean(r.dataQuality?.sourceConflict),
+        fakeMove: Boolean(r.dataQuality?.fakeMoveSuspected),
+        executableAt100: false,
+        regime: regime.label,
+        marketTs: r.asset.observedAt,
+      });
     } catch (e) {
       /* learning schema may not be ready; do not break paper trading */
       if (process.env.NODE_ENV !== "production") {
@@ -852,6 +932,57 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
        values ($1,'paper_trade','info',$2,$3,$4,now(),'in-app')`,
       [rid(), `Paper BUY ${r.asset.symbol}`, `Filled ${fill.qty} @ ${fill.price} (${intent.strategyId}, slip ${fill.slippageBps} bps)`, intent.assetId],
     );
+  }
+
+  try {
+    const considered = new Set(entries.map((e) => e.assetId));
+    for (const r of ranked.slice(0, 10)) {
+      if (held.has(r.asset.id) || considered.has(r.asset.id)) continue;
+      const reject = Boolean(r.dataQuality?.blockEntry);
+      await recordDecisionSnapshot(sql, {
+        assetId: r.asset.id,
+        symbol: r.asset.symbol,
+        decision: reject ? "REJECT" : "WAIT",
+        strategyId: reject ? "quality_gate" : "stand_aside",
+        strategyVersion: "1.0.0",
+        ranked: r,
+        regime,
+        confidence: r.confidence,
+        notes: reject ? (r.dataQuality?.flags.join(",") ?? "quality") : "WAIT is a real decision — not missing data",
+        dataQuality: buildDataQuality({
+          priceFresh: !r.dataQuality?.stale,
+          dataAgeMs: r.asset.dataAgeMs,
+          sourceReliability: r.asset.sourceReliability,
+          source: r.asset.source,
+          stalenessFlags: r.dataQuality?.flags ?? [],
+          score: r.dataQuality?.score,
+          sourceConflict: r.dataQuality?.sourceConflict,
+          delayed: r.dataQuality?.delayed,
+          fakeMoveSuspected: r.dataQuality?.fakeMoveSuspected,
+        }),
+        latestMarketDataTimestamp: r.asset.observedAt,
+        analysisTimestamp: nowIso(),
+        capitalProfile: profileFromEnv(),
+        executableAt100: false,
+        lookaheadClean: true,
+      });
+      await persistLiveTrainingExperience(sql, {
+        asset: r.asset.symbol,
+        assetClass: r.asset.kind,
+        decision: reject ? "REJECT" : "WAIT",
+        confidence: r.confidence,
+        qualityScore: r.dataQuality?.score ?? 50,
+        sourceConflict: Boolean(r.dataQuality?.sourceConflict),
+        fakeMove: Boolean(r.dataQuality?.fakeMoveSuspected),
+        executableAt100: false,
+        regime: regime.label,
+        marketTs: r.asset.observedAt,
+      });
+    }
+  } catch (e) {
+    if (process.env.NODE_ENV !== "production") {
+      console.error("[learning] failed to record WAIT/REJECT:", e instanceof Error ? e.message : e);
+    }
   }
 
   const pos2 = await sql.query<{ asset_id: string; qty: number; avg_price: number }>(
@@ -1092,8 +1223,14 @@ async function ingestOnce(): Promise<void> {
     if (sol && cb.sol) sol.priceUsd = cb.sol;
 
     const overlayBySym = new Map<string, { priceUsd: number; change24hPct: number | null }>();
+    const quotesBySym = new Map<string, SourceQuote[]>();
     for (const o of extras.overlays) {
       overlayBySym.set(o.symbol.toUpperCase(), { priceUsd: o.priceUsd, change24hPct: o.change24hPct });
+      if (o.priceUsd > 0) {
+        const list = quotesBySym.get(o.symbol.toUpperCase()) ?? [];
+        list.push({ source: o.source, priceUsd: o.priceUsd, observedAt: nowIso() });
+        quotesBySym.set(o.symbol.toUpperCase(), list);
+      }
     }
     const overlayTs = nowIso();
     for (const a of merged.values()) {
@@ -1360,6 +1497,76 @@ async function ingestOnce(): Promise<void> {
     }
     ranked.sort(compareOpportunities);
 
+    try {
+      const nowMs = Date.now();
+      for (const r of ranked) {
+        const quotes = [...(quotesBySym.get(r.asset.symbol.toUpperCase()) ?? [])];
+        if (r.asset.priceUsd && r.asset.priceUsd > 0) {
+          quotes.push({
+            source: r.asset.source ?? "coingecko",
+            priceUsd: r.asset.priceUsd,
+            observedAt: r.asset.observedAt ?? nowIso(),
+            volume24hUsd: r.asset.volume24hUsd,
+            reliability: r.asset.sourceReliability,
+          });
+        }
+        const q = assessDataQuality({
+          assetId: r.asset.id,
+          symbol: r.asset.symbol,
+          kind: r.asset.kind,
+          primaryPriceUsd: r.asset.priceUsd ?? 0,
+          primarySource: r.asset.source,
+          primaryObservedAt: r.asset.observedAt,
+          dataAgeMs: r.asset.dataAgeMs,
+          volume24hUsd: r.asset.volume24hUsd,
+          liquidityUsd: r.asset.liquidityUsd,
+          change1hPct: r.asset.change1hPct,
+          change24hPct: r.asset.change24hPct,
+          quotes,
+          news: newsDto.map((n) => ({ publishedAt: n.publishedAt, title: n.title })),
+          nowMs,
+        });
+        r.dataQuality = qualitySummary(q);
+        if (q.score < 70) r.reasons = [...r.reasons, `Data quality ${q.score.toFixed(0)}`];
+        if (q.sourceConflict) r.riskReasons = [...r.riskReasons, q.conflictDetails ?? "Cross-source disagreement"];
+        if (q.fakeMoveSuspected) r.riskReasons = [...r.riskReasons, "Suspected unconfirmed pump"];
+        if (ranked.indexOf(r) >= 40) continue;
+        await sql.query(
+          `insert into asset_data_quality (id, asset_id, symbol, score, components, flags, source_conflict, conflicting_sources, conflict_type, conflict_severity, conflict_details, delayed, stale, fake_move_suspected, wash_trade_suspected, event_confirmed, news_confirmed, block_entry, block_reason, learning_weight, quote_count, spread_bps, observed_at)
+           values ($1,$2,$3,$4,$5::jsonb,$6::jsonb,$7,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,now())`,
+          [
+            learningRid(), r.asset.id, r.asset.symbol, q.score, JSON.stringify(q.components), JSON.stringify(q.flags),
+            q.sourceConflict, JSON.stringify(q.conflictingSources), q.conflictType, q.conflictSeverity, q.conflictDetails,
+            q.delayed, q.stale, q.fakeMoveSuspected, q.washTradeSuspected, q.eventConfirmed, q.newsConfirmed,
+            q.blockEntry, q.blockReason, q.learningWeight, q.quoteCount, q.spreadBps,
+          ],
+        );
+        if (q.sourceConflict) {
+          await sql.query(
+            `insert into source_conflicts (id, asset_id, conflict_type, conflict_severity, conflicting_sources, details, observed_at)
+             values ($1,$2,$3,$4,$5::jsonb,$6,now())`,
+            [learningRid(), r.asset.id, q.conflictType, q.conflictSeverity, JSON.stringify(q.conflictingSources), q.conflictDetails],
+          );
+        }
+        const life = classifyLifecycle({
+          lastObservedAt: r.asset.observedAt ? Date.parse(r.asset.observedAt) : nowMs,
+          priceUsd: r.asset.priceUsd,
+          liquidityUsd: r.asset.liquidityUsd,
+          volume24hUsd: r.asset.volume24hUsd,
+          nowMs,
+          rugRisk: r.rugRisk,
+        });
+        await sql.query(
+          `insert into asset_lifecycle (asset_id, symbol, state, reason, last_observed_at, updated_at)
+           values ($1,$2,$3,$4,now(),now())
+           on conflict (asset_id) do update set state = excluded.state, reason = excluded.reason, last_observed_at = excluded.last_observed_at, updated_at = now()`,
+          [r.asset.id, r.asset.symbol, life.state, life.reason],
+        );
+      }
+    } catch (e) {
+      errors.push(`data-quality: ${e instanceof Error ? e.message : "fail"}`);
+    }
+
     const gen = generateSignals({
       ranked,
       news: newsDto,
@@ -1505,6 +1712,34 @@ async function ingestOnce(): Promise<void> {
           [s.id, s.walletId, s.marketId, s.assetId, s.side, s.walletQualityScore, s.copyConfidence, s.sourceTradeId, s.sourceTradeTimestamp, s.observedAt, s.latencySeconds, s.expectedValue, JSON.stringify(s.reasons)],
         );
       }
+
+      try {
+        const clusters = clusterEvents(
+          detectedEventDtos.map((e) => ({
+            id: e.id,
+            title: e.title,
+            source: e.source,
+            publishedAt: e.publishedAt ? Date.parse(e.publishedAt) : null,
+            observedAt: Date.parse(e.observedAt),
+            affectedAssets: e.affectedAssets,
+          })),
+        );
+        for (const c of clusters.slice(0, 30)) {
+          await sql.query(
+            `insert into event_clusters (cluster_id, title, member_ids, sources, independent_source_count, first_published_at, last_observed_at)
+             values ($1,$2,$3::jsonb,$4::jsonb,$5,$6,now())
+             on conflict (cluster_id) do update set member_ids = excluded.member_ids, sources = excluded.sources, independent_source_count = excluded.independent_source_count, last_observed_at = now()`,
+            [c.clusterId, c.title, JSON.stringify(c.memberIds), JSON.stringify(c.sources), c.independentSourceCount, c.firstPublishedAt ? new Date(c.firstPublishedAt).toISOString() : null],
+          );
+        }
+        await persistEventDecayFromNews(
+          sql,
+          detectedEventDtos.map((e) => ({ id: e.id, publishedAt: e.publishedAt, observedAt: e.observedAt })),
+          [],
+        );
+      } catch {
+        /* clustering is best-effort */
+      }
     } catch (addonErr) {
       errors.push(`events/wallets: ${addonErr instanceof Error ? addonErr.message : "failed"}`);
     }
@@ -1527,11 +1762,46 @@ async function ingestOnce(): Promise<void> {
       spxChangePct: extras.macro.spxChangePct,
       mempoolFastSatVb: extras.mempoolFastSatVb,
     };
+    try {
+      const fx = await fetchGbpUsd();
+      if (fx.quote) {
+        await sql.query(
+          `insert into fx_quotes (id, pair, rate, source, observed_at) values ($1,'GBPUSD',$2,$3,now())`,
+          [learningRid(), fx.quote.gbpUsd, fx.quote.source],
+        );
+        const fillsN = await sql.query<{ n: number }>(`select count(*)::int as n from paper_fills where portfolio_id = $1`, [DEFAULT_PORTFOLIO_ID]);
+        const seed = await sql.query<{ starting_equity_usd: number }>(`select starting_equity_usd from paper_portfolios where id = $1`, [DEFAULT_PORTFOLIO_ID]);
+        const nFills = num0(fillsN[0]?.n);
+        const start = num0(seed[0]?.starting_equity_usd);
+        if (nFills === 0 && start === 10000) {
+          const usd = RESEARCH_EQUITY_GBP * fx.quote.gbpUsd;
+          await sql.query(
+            `update paper_portfolios set starting_equity_usd=$2, cash_usd=$2, equity_usd=$2, peak_equity_usd=$2, day_anchor_equity_usd=$2, capital_profile=$3, starting_equity_gbp=$4, gbp_usd_rate=$5, gbp_usd_observed_at=now(), updated_at=now() where id=$1`,
+            [DEFAULT_PORTFOLIO_ID, usd, profileFromEnv(), RESEARCH_EQUITY_GBP, fx.quote.gbpUsd],
+          );
+        } else {
+          await sql.query(
+            `update paper_portfolios set gbp_usd_rate=$2, gbp_usd_observed_at=now(), capital_profile=$3, starting_equity_gbp=coalesce(starting_equity_gbp,$4) where id=$1`,
+            [DEFAULT_PORTFOLIO_ID, fx.quote.gbpUsd, profileFromEnv(), RESEARCH_EQUITY_GBP],
+          );
+        }
+      }
+    } catch (e) {
+      errors.push(`fx: ${e instanceof Error ? e.message : "DATA UNAVAILABLE: GBPUSD"}`);
+    }
     await paperTick(sql, ranked, signalDto, regime);
     try {
       await runLearningJobs(sql);
     } catch (e) {
       errors.push(`learning jobs: ${e instanceof Error ? e.message : "fail"}`);
+    }
+    try {
+      const train = await runTrainingJobs(sql);
+      if (train.ran && process.env.NODE_ENV !== "production") {
+        console.info("[training]", train.notes);
+      }
+    } catch (e) {
+      errors.push(`training jobs: ${e instanceof Error ? e.message : "fail"}`);
     }
     const portfolio = await assemblePortfolio(sql, ranked);
     const sources = await sql.query<Record<string, unknown>>("select * from source_health order by source");
@@ -1734,6 +2004,9 @@ export async function changeLearnerModeData(input: {
 }
 export async function getXIntelligenceDashboard() {
   return getXIntelligence();
+}
+export async function getTrainingDashboardData() {
+  return getTrainingDashboard();
 }
 
 export async function getSystem(): Promise<SystemDTO> {

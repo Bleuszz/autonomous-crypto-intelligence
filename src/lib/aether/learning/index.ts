@@ -53,8 +53,10 @@ export async function recordDecisionSnapshot(sql: Sql, ctx: DecisionContext): Pr
     `insert into trade_decision_snapshots (
        id, portfolio_id, asset_id, symbol, decision, baseline_action, side, action_at, strategy_id, strategy_version,
        learner_version, signal_id, order_id, features, market_structure, regime, evidence, risk_state,
-       sizing, execution_assumptions, data_quality, expected_value, confidence, learner_recommendation, notes
-     ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb,$18::jsonb,$19::jsonb,$20::jsonb,$21::jsonb,$22,$23,$24::jsonb,$25)`,
+       sizing, execution_assumptions, data_quality, expected_value, confidence, learner_recommendation, notes,
+       latest_market_data_timestamp, latest_news_timestamp, latest_social_timestamp, latest_event_timestamp,
+       analysis_timestamp, capital_profile, executable_at_100, lookahead_clean
+     ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb,$18::jsonb,$19::jsonb,$20::jsonb,$21::jsonb,$22,$23,$24::jsonb,$25,$26,$27,$28,$29,$30,$31,$32,$33)`,
     [
       snapshot.id, snapshot.portfolioId, snapshot.assetId, snapshot.symbol, snapshot.decision, snapshot.baselineAction,
       snapshot.side, snapshot.actionAt, snapshot.strategyId, snapshot.strategyVersion, snapshot.learnerVersion,
@@ -62,6 +64,10 @@ export async function recordDecisionSnapshot(sql: Sql, ctx: DecisionContext): Pr
       serialize(snapshot.regime), serialize(snapshot.evidence), serialize(snapshot.riskState), serialize(snapshot.sizing),
       serialize(snapshot.executionAssumptions), serialize(snapshot.dataQuality), snapshot.expectedValue,
       snapshot.confidence, serialize(snapshot.learnerRecommendation), snapshot.notes,
+      snapshot.latestMarketDataTimestamp ?? null, snapshot.latestNewsTimestamp ?? null,
+      snapshot.latestSocialTimestamp ?? null, snapshot.latestEventTimestamp ?? null,
+      snapshot.analysisTimestamp ?? snapshot.actionAt, snapshot.capitalProfile ?? null,
+      snapshot.executableAt100 ?? null, snapshot.lookaheadClean !== false,
     ],
   );
   return snapshot;

@@ -96,6 +96,8 @@ export function isQualityPaperEntry(r: RankedOpportunity, s: { strategyId: strin
   if (r.asset.kind === "stable") return false;
   if (!(r.asset.priceUsd && r.asset.priceUsd > 0)) return false;
   if (!isFreshMark(r)) return false;
+  if (r.dataQuality?.blockEntry) return false;
+  if (r.dataQuality?.fakeMoveSuspected && (r.dataQuality.score ?? 100) < 60) return false;
   const d24 = Math.abs(r.asset.change24hPct ?? 0);
   if (r.asset.kind === "dex") {
     if (s.confidence < PAPER_ENGINE.minConfidenceDex) return false;

@@ -22,6 +22,7 @@ import { Route as ScannerRouteImport } from './routes/scanner'
 import { Route as SocialRouteImport } from './routes/social'
 import { Route as StrategiesRouteImport } from './routes/strategies'
 import { Route as SystemRouteImport } from './routes/system'
+import { Route as TrainingRouteImport } from './routes/training'
 import { Route as WalletsRouteImport } from './routes/wallets'
 import { Route as XIntelligenceRouteImport } from './routes/x-intelligence'
 import { Route as TokenAssetIdRouteImport } from './routes/token.$assetId'
@@ -91,6 +92,11 @@ const SystemRoute = SystemRouteImport.update({
   path: '/system',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TrainingRoute = TrainingRouteImport.update({
+  id: '/training',
+  path: '/training',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const WalletsRoute = WalletsRouteImport.update({
   id: '/wallets',
   path: '/wallets',
@@ -121,6 +127,7 @@ export interface FileRoutesByFullPath {
   '/social': typeof SocialRoute
   '/strategies': typeof StrategiesRoute
   '/system': typeof SystemRoute
+  '/training': typeof TrainingRoute
   '/wallets': typeof WalletsRoute
   '/x-intelligence': typeof XIntelligenceRoute
   '/token/$assetId': typeof TokenAssetIdRoute
@@ -139,6 +146,7 @@ export interface FileRoutesByTo {
   '/social': typeof SocialRoute
   '/strategies': typeof StrategiesRoute
   '/system': typeof SystemRoute
+  '/training': typeof TrainingRoute
   '/wallets': typeof WalletsRoute
   '/x-intelligence': typeof XIntelligenceRoute
   '/token/$assetId': typeof TokenAssetIdRoute
@@ -158,6 +166,7 @@ export interface FileRoutesById {
   '/social': typeof SocialRoute
   '/strategies': typeof StrategiesRoute
   '/system': typeof SystemRoute
+  '/training': typeof TrainingRoute
   '/wallets': typeof WalletsRoute
   '/x-intelligence': typeof XIntelligenceRoute
   '/token/$assetId': typeof TokenAssetIdRoute
@@ -178,6 +187,7 @@ export interface FileRouteTypes {
     | '/social'
     | '/strategies'
     | '/system'
+    | '/training'
     | '/wallets'
     | '/x-intelligence'
     | '/token/$assetId'
@@ -196,6 +206,7 @@ export interface FileRouteTypes {
     | '/social'
     | '/strategies'
     | '/system'
+    | '/training'
     | '/wallets'
     | '/x-intelligence'
     | '/token/$assetId'
@@ -214,6 +225,7 @@ export interface FileRouteTypes {
     | '/social'
     | '/strategies'
     | '/system'
+    | '/training'
     | '/wallets'
     | '/x-intelligence'
     | '/token/$assetId'
@@ -233,6 +245,7 @@ export interface RootRouteChildren {
   SocialRoute: typeof SocialRoute
   StrategiesRoute: typeof StrategiesRoute
   SystemRoute: typeof SystemRoute
+  TrainingRoute: typeof TrainingRoute
   WalletsRoute: typeof WalletsRoute
   XIntelligenceRoute: typeof XIntelligenceRoute
   TokenAssetIdRoute: typeof TokenAssetIdRoute
@@ -331,6 +344,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SystemRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/training': {
+      id: '/training'
+      path: '/training'
+      fullPath: '/training'
+      preLoaderRoute: typeof TrainingRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/wallets': {
       id: '/wallets'
       path: '/wallets'
@@ -369,6 +389,7 @@ const rootRouteChildren: RootRouteChildren = {
   SocialRoute: SocialRoute,
   StrategiesRoute: StrategiesRoute,
   SystemRoute: SystemRoute,
+  TrainingRoute: TrainingRoute,
   WalletsRoute: WalletsRoute,
   XIntelligenceRoute: XIntelligenceRoute,
   TokenAssetIdRoute: TokenAssetIdRoute,

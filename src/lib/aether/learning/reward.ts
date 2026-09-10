@@ -77,6 +77,11 @@ function decisionQuality(snapshot: DecisionSnapshot, outcome: TradeOutcome): num
   }
   if (snapshot.evidence.contradictorySignals > 1) q -= 0.1;
 
+  if (snapshot.dataQuality.sourceConflict) q -= 0.08;
+  if (snapshot.dataQuality.delayed) q -= 0.06;
+  if (snapshot.dataQuality.fakeMoveSuspected) q -= 0.12;
+  if ((snapshot.dataQuality.score ?? 70) < 40) q -= 0.1;
+
   // Directional correctness of thesis.
   q += 0.12 * directionalCorrectness(snapshot, outcome);
 

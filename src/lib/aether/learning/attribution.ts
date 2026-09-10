@@ -76,8 +76,9 @@ const RULES: FeatureRule[] = [
     score: (s, o) => {
       const soc = s.features.social;
       const worked = o.realizedReturnPct > 0;
-      const score = soc > 0.5 ? (worked ? 0.12 : -0.12) : 0;
-      return contributionFromScore(score, "Social sentiment");
+      // X/social is noisy. Cap contribution well below events/wallets.
+      const score = soc > 0.5 ? (worked ? 0.05 : -0.08) : 0;
+      return contributionFromScore(score, "Social sentiment (X down-weighted)");
     },
   },
   {
@@ -86,8 +87,10 @@ const RULES: FeatureRule[] = [
       const news = s.features.news;
       const events = s.evidence.eventsNear;
       const worked = o.realizedReturnPct > 0;
-      const score = (news > 0.45 || events > 0) ? (worked ? 0.15 : -0.1) : 0;
-      return contributionFromScore(score, "News/events");
+      const eventScore = events > 0 ? (worked ? 0.22 : -0.14) : 0;
+      const newsScore = news > 0.45 ? (worked ? 0.1 : -0.08) : 0;
+      const score = eventScore + newsScore;
+      return contributionFromScore(score, "News/events (events outrank tweets)");
     },
   },
   {
