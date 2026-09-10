@@ -58,11 +58,20 @@ export function evaluateTradingIntelligence(ctx: TradingIntelContext): TradingIn
   };
 }
 
+function insufficientOnly(intel: TradingIntelligence): boolean {
+  return intel.reasons.some((r) => r === "NO DATA" || r.startsWith("INSUFFICIENT EVIDENCE"));
+}
+
 export function gateIntentWithTechnicalEvidence(intent: GatedIntent, intel: TradingIntelligence): { intent: GatedIntent; veto: boolean; reason: string | null } {
   if (intent.side === "sell") return { intent, veto: false, reason: null };
   if (intel.decision === "REJECT") return { intent: { ...intent, confidence: Math.min(intent.confidence, 0.2), explanation: [...intent.explanation, ...intel.reasons] }, veto: true, reason: intel.reasons[0] ?? "Technical REJECT" };
-  if (intel.decision === "WAIT") return { intent: { ...intent, confidence: Math.min(intent.confidence, 0.45), explanation: [...intent.explanation, `Technical WAIT: ${intel.reasons[0] ?? intel.conflict.reason}`] }, veto: true, reason: intel.reasons[0] ?? intel.conflict.reason };
-  return { intent: { ...intent, explanation: [...intent.explanation, `Technical ENTER conf ${(intel.confidence*100).toFixed(0)}%`] }, veto: false, reason: null };
+  if (intel.decision === "WAIT" && !insufficientOnly(intel) && (intel.conflict.conflictScore >= 0.45 || intel.reasons.some((r) => /bearish|conflict|Look-ahead/i.test(r)))) {
+    return { intent: { ...intent, confidence: Math.min(intent.confidence, 0.45), explanation: [...intent.explanation, `Technical WAIT: ${intel.reasons[0] ?? intel.conflict.reason}`] }, veto: true, reason: intel.reasons[0] ?? intel.conflict.reason };
+  }
+  const note = intel.decision === "ENTER"
+    ? `Technical ENTER conf ${(intel.confidence * 100).toFixed(0)}%`
+    : `Technical ${intel.decision}: ${intel.reasons[0] ?? "INSUFFICIENT EVIDENCE"}`;
+  return { intent: { ...intent, explanation: [...intent.explanation, note] }, veto: false, reason: null };
 }
 
 export function contextFromSparkline(opts: { assetId: string; symbol: string; sparkline7d: number[] | null | undefined; lastCloseMs: number; decisionTimestamp: string; volume24hUsd?: number | null; liquidityUsd?: number | null; fundingPct?: number | null }): TradingIntelContext {
