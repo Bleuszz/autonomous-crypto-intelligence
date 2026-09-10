@@ -50,12 +50,27 @@ export type MarketStructure = {
 };
 
 export type EvidenceState = {
+  version?: "1.0";
   newsBoost: number;
   socialBoost: number;
   walletHits: number;
   eventsNear: number;
   signalAgreement: number;
   contradictorySignals: number;
+  items?: DecisionEvidenceItem[];
+};
+
+export type DecisionEvidenceItem = {
+  source: string;
+  feature: string;
+  value: number | boolean | string | null;
+  observedAt: string | null;
+  status: "available" | "unavailable" | "stale";
+  reliability: number;
+  contribution: number;
+  direction: "positive" | "neutral" | "negative";
+  contradiction: boolean;
+  decisionImpact: string;
 };
 
 export type RiskState = {
@@ -124,6 +139,8 @@ export type DecisionContext = {
   sizing?: SizingInfo;
   execution?: ExecutionAssumptions;
   dataQuality?: DataQuality;
+  evidence?: EvidenceState;
+  riskState?: RiskState;
   learnerRecommendation?: LearnerRecommendation | null;
   notes?: string;
   latestMarketDataTimestamp?: string | null;

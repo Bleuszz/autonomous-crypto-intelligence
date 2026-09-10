@@ -12,7 +12,7 @@ test("jsonbField treats JSON-null and the string null as null", () => {
   assert.equal(jsonbField(null), null);
   assert.equal(jsonbField(undefined), null);
   assert.equal(jsonbField("null"), null);
-  assert.deepEqual(jsonbField('{\"action\":\"ENTER\"}'), { action: "ENTER" });
+  assert.deepEqual(jsonbField('{"action":"ENTER"}'), { action: "ENTER" });
   assert.equal(jsonbField("{not-json"), null);
 });
 

@@ -483,6 +483,7 @@ function entrySnapshotContext(
   equity: number,
   cash: number,
   dayAnchor: number,
+  regime: RegimeInput,
   signalId?: string | null,
   orderId?: string | null,
   learnerRec?: LearnerRecommendation | null,
@@ -535,8 +536,15 @@ function entrySnapshotContext(
     sizing,
     execution: exec,
     dataQuality,
+    riskState: _riskState,
+    regime,
     learnerRecommendation: learnerRec ?? null,
     confidence: intent.confidence,
+    latestMarketDataTimestamp: r.asset.observedAt,
+    analysisTimestamp: nowIso(),
+    capitalProfile: profileFromEnv(),
+    executableAt100: false,
+    lookaheadClean: true,
     notes: `Baseline ENTER; actual ${actualDecision}; learner ${learnerRec ? learnerRec.action : "not consulted"}; gate ${gate.ok ? "ok" : "rejected"}`,
   };
 }
@@ -844,11 +852,13 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
     let actualDecision: DecisionAction = "ENTER";
     if (learnerMode !== "DISABLED") {
       try {
-        const baseCtx = entrySnapshotContext(r, intent, fill, gate, equity, cash, dayAnchor, null, oid, null);
+        const baseCtx = entrySnapshotContext(r, intent, fill, gate, equity, cash, dayAnchor, regime, null, oid, null);
         const rec = await getLearnerRecommendation(sql, baseCtx);
         learnerRec = rec.recommendation;
         if (learnerMode === "ACTIVE" && learnerRec.action !== "ENTER") {
-          actualDecision = learnerRec.action;
+          // An entry consultation can stand aside or reject, but must never
+          // manufacture an EXIT for an asset that is not yet held.
+          actualDecision = learnerRec.action === "WAIT" ? "WAIT" : "REJECT";
         }
       } catch (e) {
         if (process.env.NODE_ENV !== "production") {
@@ -860,8 +870,21 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
     if (actualDecision !== "ENTER") {
       // ACTIVE mode: learner overrode the baseline. Record the non-enter snapshot and skip execution.
       try {
-        const ctx = entrySnapshotContext(r, intent, fill, gate, equity, cash, dayAnchor, null, oid, learnerRec, actualDecision);
-        await recordDecisionSnapshot(sql, ctx);
+        const ctx = entrySnapshotContext(r, intent, fill, gate, equity, cash, dayAnchor, regime, null, oid, learnerRec, actualDecision);
+        const snapshot = await recordDecisionSnapshot(sql, ctx);
+        await persistLiveTrainingExperience(sql, {
+          snapshotId: snapshot.id,
+          asset: r.asset.symbol,
+          assetClass: r.asset.kind,
+          decision: actualDecision,
+          confidence: intent.confidence,
+          qualityScore: r.dataQuality?.score ?? 50,
+          sourceConflict: Boolean(r.dataQuality?.sourceConflict),
+          fakeMove: Boolean(r.dataQuality?.fakeMoveSuspected),
+          executableAt100: false,
+          regime: regime.label,
+          marketTs: r.asset.observedAt,
+        });
       } catch (e) {
         if (process.env.NODE_ENV !== "production") {
           console.error("[learning] failed to record learner-override snapshot:", e instanceof Error ? e.message : e);
@@ -906,10 +929,10 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
     held.add(intent.assetId);
     // Learning: record the executed decision snapshot with the learner recommendation consulted before acting.
     try {
-      const ctx = entrySnapshotContext(r, intent, fill, gate, equity, cash, dayAnchor, null, oid, learnerRec, "ENTER");
-      await recordDecisionSnapshot(sql, ctx);
+      const ctx = entrySnapshotContext(r, intent, fill, gate, equity, cash, dayAnchor, regime, null, oid, learnerRec, "ENTER");
+      const snapshot = await recordDecisionSnapshot(sql, ctx);
       await persistLiveTrainingExperience(sql, {
-        snapshotId: ctx.orderId ?? oid,
+        snapshotId: snapshot.id,
         asset: r.asset.symbol,
         assetClass: r.asset.kind,
         decision: "ENTER",
@@ -939,7 +962,7 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
     for (const r of ranked.slice(0, 10)) {
       if (held.has(r.asset.id) || considered.has(r.asset.id)) continue;
       const reject = Boolean(r.dataQuality?.blockEntry);
-      await recordDecisionSnapshot(sql, {
+      const snapshot = await recordDecisionSnapshot(sql, {
         assetId: r.asset.id,
         symbol: r.asset.symbol,
         decision: reject ? "REJECT" : "WAIT",
@@ -967,6 +990,7 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
         lookaheadClean: true,
       });
       await persistLiveTrainingExperience(sql, {
+        snapshotId: snapshot.id,
         asset: r.asset.symbol,
         assetClass: r.asset.kind,
         decision: reject ? "REJECT" : "WAIT",

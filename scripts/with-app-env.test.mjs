@@ -11,6 +11,7 @@ import {
   parseAppEnv,
   projectRoot,
   readAppEnv,
+  resolveWrappedCommand,
 } from "./with-app-env.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -81,6 +82,13 @@ test("the wrapped command runs with the app env applied", async () => {
     PRINT_FLAG,
   ]);
   assert.equal(stdout, "false");
+});
+
+test("resolves Vite through Node instead of a platform-specific shell shim", () => {
+  const resolved = resolveWrappedCommand("vite", ["build"], "C:/workspace");
+  assert.equal(resolved.command, process.execPath);
+  assert.match(resolved.args[0], /node_modules[\\/]vite[\\/]bin[\\/]vite\.js$/);
+  assert.deepEqual(resolved.args.slice(1), ["build"]);
 });
 
 test("the wrapped command sees an explicit override, not the file value", async () => {

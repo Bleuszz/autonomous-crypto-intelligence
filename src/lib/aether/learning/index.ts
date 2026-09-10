@@ -15,6 +15,7 @@ import {
   getLearnerPredictionStats,
   getLearnerRecentPredictions,
   jsonbField,
+  parseLearnerRecommendation,
   setLearnerOperatingState,
 } from "./controls.ts";
 import type {
@@ -630,6 +631,7 @@ export {
   getLearnerHealth,
   getLearnerPassword,
   jsonbField,
+  parseLearnerRecommendation,
 };
 export type {
   DecisionAction,

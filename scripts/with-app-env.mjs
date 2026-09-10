@@ -143,6 +143,19 @@ export function isMainModule(moduleUrl) {
   }
 }
 
+/**
+ * npm exposes package binaries differently on Windows (`*.cmd`). Launch Vite's
+ * JavaScript entry with the current Node executable so dev/build/preview work
+ * identically without relying on shell-specific command resolution.
+ */
+export function resolveWrappedCommand(command, args, root = projectRoot()) {
+  if (command !== "vite") return { command, args };
+  return {
+    command: process.execPath,
+    args: [join(root, "node_modules", "vite", "bin", "vite.js"), ...args],
+  };
+}
+
 function main(argv) {
   const [command, ...args] = argv;
   if (!command) {
@@ -153,7 +166,8 @@ function main(argv) {
     { ...readLocalSecrets(projectRoot()), ...readAppEnv(projectRoot()) },
     process.env,
   );
-  const child = spawn(command, args, { stdio: "inherit", env });
+  const resolved = resolveWrappedCommand(command, args);
+  const child = spawn(resolved.command, resolved.args, { stdio: "inherit", env });
   // The dev server is long-running and is stopped by signalling this wrapper.
   for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
     process.on(signal, () => child.kill(signal));

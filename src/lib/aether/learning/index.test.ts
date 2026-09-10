@@ -7,6 +7,7 @@ import {
   getLearnerPassword,
   getLearnerPredictionStats,
   loadLearnerPredictions,
+  parseLearnerRecommendation,
   setLearnerOperatingState,
 } from "./controls.ts";
 import type { LearnerActionStats, LearnerPredictionStats } from "./types.ts";
@@ -378,6 +379,26 @@ describe("loadLearnerPredictions", () => {
     ]);
     const preds = await loadLearnerPredictions(mockSql.sql, 10);
     assert.equal(preds[0].regime, null);
+  });
+
+  it("skips JSON null, malformed, and incomplete legacy recommendations", async () => {
+    const valid = predictionRow({ id: "valid" });
+    mockSql.push([
+      { ...predictionRow({ id: "json-null" }), learner_recommendation: "null" },
+      { ...predictionRow({ id: "malformed" }), learner_recommendation: "{" },
+      { ...predictionRow({ id: "missing-action" }), learner_recommendation: '{"confidence":0.6,"expectedReward":0.2}' },
+      valid,
+    ]);
+    const preds = await loadLearnerPredictions(mockSql.sql, 10);
+    assert.deepEqual(preds.map((p) => p.snapshotId), ["valid"]);
+  });
+
+  it("normalizes optional recommendation reasons", () => {
+    assert.deepEqual(
+      parseLearnerRecommendation({ action: "WAIT", confidence: 0.4, expectedReward: 0.1 }),
+      { action: "WAIT", confidence: 0.4, expectedReward: 0.1, reasons: [] },
+    );
+    assert.equal(parseLearnerRecommendation({ action: null, confidence: 0.4, expectedReward: 0.1 }), null);
   });
 });
 

@@ -164,6 +164,43 @@ describe("contextual learner", () => {
     assert.ok(recNew.expectedReward > recOld.expectedReward);
   });
 
+  it("does not use patterns beyond the decision time frontier", () => {
+    const snapshot = createDecisionSnapshot(makeCtx());
+    const futurePattern = {
+      id: "p-future",
+      patternHash: "future",
+      status: "APPROVED" as const,
+      description: "future evidence",
+      conditions: { momentumBand: "high", liquidityBand: "high" },
+      action: "ENTER" as const,
+      regime: null,
+      assetScope: null,
+      sampleCount: 30,
+      positiveCount: 30,
+      negativeCount: 0,
+      winRate: 1,
+      expectancy: 1,
+      avgReward: 1,
+      rewardVariance: 0,
+      confidenceLower: 1,
+      confidenceUpper: 1,
+      oosExpectancy: 1,
+      walkForwardStability: 1,
+      recencyWeight: 1,
+      firstSeenAt: new Date(Date.parse(snapshot.actionAt) + 60_000).toISOString(),
+      lastSeenAt: new Date(Date.parse(snapshot.actionAt) + 60_000).toISOString(),
+      promotedAt: null,
+      rolledBackAt: null,
+      championVersion: null,
+      learnerVersion: DEFAULT_LEARNER_VERSION,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    const rec = estimateExpectedReward({ snapshot, action: "ENTER", patterns: [futurePattern] });
+    assert.equal(rec.expectedReward, 0);
+    assert.equal(rec.matchedPatterns.length, 0);
+  });
+
   it("does not issue arbitrary confidence scores", () => {
     const snapshots = Array.from({ length: 15 }, () => createDecisionSnapshot(makeCtx()));
     const rewards = snapshots.map((s) => computeReward(s, makeOutcome(5)));

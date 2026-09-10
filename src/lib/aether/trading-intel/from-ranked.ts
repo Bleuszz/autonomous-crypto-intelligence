@@ -20,7 +20,7 @@ export function assetsFromRanked(rows: LooseRanked[] | null | undefined): Tradin
   if (!rows?.length) return [];
   const out: TradingIntelAssetInput[] = [];
   for (const row of rows) {
-    const a = row.asset ?? row;
+    const a: LooseAsset = row.asset ?? row;
     if (!a || typeof a !== "object") continue;
     const id = typeof a.id === "string" ? a.id : null;
     const symbol = typeof a.symbol === "string" ? a.symbol : null;

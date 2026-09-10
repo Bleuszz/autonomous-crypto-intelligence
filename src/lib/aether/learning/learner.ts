@@ -44,13 +44,24 @@ export function estimateExpectedReward(opts: {
   const targetAction = opts.action;
   const minSim = opts.minSimilarity ?? 0.55;
   const decayDays = opts.recencyDecayDays ?? 30;
-  const now = Date.now();
+  const actionAt = Date.parse(opts.snapshot.actionAt);
+  const timeFrontier = Number.isFinite(actionAt) ? actionAt : Date.now();
 
   const matched = opts.patterns
     .filter((p) => p.action === targetAction)
-    .map((p) => ({ p, sim: conditionsSimilarity(target, p.conditions as PatternConditions) }))
+    .map((p) => {
+      const lastSeen = Date.parse(p.lastSeenAt);
+      // A historical recommendation cannot consult a pattern observed later.
+      if (!Number.isFinite(lastSeen) || lastSeen > timeFrontier) return null;
+      const daysAgo = Math.max(0, (timeFrontier - lastSeen) / (24 * 3600 * 1000));
+      const recency = Math.exp(-daysAgo / Math.max(decayDays, 0.001));
+      const sim = conditionsSimilarity(target, p.conditions as PatternConditions);
+      const sampleWeight = Math.min(1, Math.sqrt(Math.max(0, p.sampleCount)) / Math.sqrt(30));
+      return { p, sim, recency, sampleWeight, weight: sim * recency * sampleWeight };
+    })
+    .filter((row): row is NonNullable<typeof row> => row !== null)
     .filter(({ sim }) => sim >= minSim)
-    .sort((a, b) => b.sim - a.sim)
+    .sort((a, b) => b.weight - a.weight)
     .slice(0, 12);
 
   if (!matched.length) {
@@ -65,21 +76,19 @@ export function estimateExpectedReward(opts: {
   let num = 0;
   let den = 0;
   const patternReasons: string[] = [];
-  for (const { p, sim } of matched) {
-    const lastSeen = new Date(p.lastSeenAt).getTime();
-    const daysAgo = (now - lastSeen) / (24 * 3600 * 1000);
-    const recency = Math.exp(-daysAgo / decayDays);
-    const sampleWeight = Math.min(1, Math.sqrt(p.sampleCount) / Math.sqrt(30));
-    const w = sim * recency * sampleWeight;
+  for (const { p, sim, recency, weight: w } of matched) {
     const expectancy = p.oosExpectancy ?? p.expectancy ?? 0;
     num += w * expectancy;
     den += w;
     patternReasons.push(
-      `${p.description} (sim ${sim.toFixed(2)}, n=${p.sampleCount}, exp ${expectancy.toFixed(3)})`,
+      `${p.description} (sim ${sim.toFixed(2)}, recency ${recency.toFixed(2)}, n=${p.sampleCount}, exp ${expectancy.toFixed(3)})`,
     );
   }
 
-  const expectedReward = den > 0 ? num / den : 0;
+  // Shrink sparse or stale evidence toward a neutral prior. Recency would
+  // otherwise cancel out when only one matching pattern exists.
+  const neutralPriorWeight = 0.5;
+  const expectedReward = den > 0 ? num / (den + neutralPriorWeight) : 0;
   const confidence = clamp(Math.min(1, den / 3) * matched[0]!.sim, 0, 1);
 
   return {

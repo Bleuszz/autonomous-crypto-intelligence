@@ -202,7 +202,7 @@ type RawPredictionRow = {
   decision: string;
   baseline_action: string | null;
   regime: string;
-  learner_recommendation: string;
+  learner_recommendation: unknown;
   total_reward: number | null;
   realized_return_pct: number | null;
 };
@@ -221,15 +221,18 @@ export async function loadLearnerPredictions(sql: Sql, limit = 500): Promise<Lea
     [limit],
   );
 
-  return rows.map((r) => {
-    const rec = jsonbField<LearnerRecommendation>(r.learner_recommendation)!;
+  return rows.flatMap((r) => {
+    const rec = parseLearnerRecommendation(r.learner_recommendation);
+    // JSONB can contain the JSON literal null even though the SQL column is not
+    // null. Legacy and partially migrated rows must not take down the dashboard.
+    if (!rec) return [];
     const predicted = rec.action;
-    const baseline = (r.baseline_action ?? r.decision) as DecisionAction;
+    const baseline = decisionAction(r.baseline_action ?? r.decision) ?? "WAIT";
     const actualReward = r.total_reward ?? null;
     const resolved = actualReward !== null;
     const correct = resolved ? predictionCorrect(predicted, actualReward) : null;
     const regimeObj = safeParseRegime(r.regime);
-    return {
+    return [{
       snapshotId: r.id,
       assetId: r.asset_id,
       symbol: r.symbol,
@@ -244,14 +247,52 @@ export async function loadLearnerPredictions(sql: Sql, limit = 500): Promise<Lea
       correct,
       resolved,
       regime: typeof regimeObj.label === "string" ? regimeObj.label : null,
-    };
+    }];
   });
 }
 
 export function jsonbField<T>(value: unknown): T | null {
   if (value == null) return null;
-  if (typeof value === "string") return JSON.parse(value) as T;
+  if (typeof value === "string") {
+    try {
+      return JSON.parse(value) as T;
+    } catch {
+      return null;
+    }
+  }
   return value as T;
+}
+
+const LEARNER_ACTIONS = new Set<DecisionAction>(["ENTER", "WAIT", "REJECT"]);
+
+function decisionAction(value: unknown): DecisionAction | null {
+  return typeof value === "string" && LEARNER_ACTIONS.has(value as DecisionAction)
+    ? (value as DecisionAction)
+    : null;
+}
+
+/** Validate the persisted recommendation contract before it reaches statistics/UI code. */
+export function parseLearnerRecommendation(value: unknown): LearnerRecommendation | null {
+  const parsed = jsonbField<Record<string, unknown>>(value);
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const action = decisionAction(parsed.action);
+  const expectedReward = parsed.expectedReward;
+  const confidence = parsed.confidence;
+  if (
+    !action ||
+    typeof expectedReward !== "number" ||
+    !Number.isFinite(expectedReward) ||
+    typeof confidence !== "number" ||
+    !Number.isFinite(confidence) ||
+    confidence < 0 ||
+    confidence > 1
+  ) {
+    return null;
+  }
+  const reasons = Array.isArray(parsed.reasons)
+    ? parsed.reasons.filter((reason): reason is string => typeof reason === "string")
+    : [];
+  return { action, expectedReward, confidence, reasons };
 }
 
 function safeParseRegime(regime: unknown): Record<string, unknown> {

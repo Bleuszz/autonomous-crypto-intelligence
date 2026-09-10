@@ -123,6 +123,32 @@ describe("snapshots", () => {
     assert.equal(s.actionAt, originalActionAt);
   });
 
+  it("preserves source changes in the machine-readable evidence packet", () => {
+    const quiet = makeRanked();
+    const active = makeRanked();
+    active.components.news = 0.8;
+    const base = { assetId: "cg:bitcoin", symbol: "BTC", decision: "ENTER" as const, strategyId: "news", strategyVersion: "1", dataQuality: { priceFresh: true, dataAgeMs: 1_000, sourceReliability: 0.9, source: "coingecko", stalenessFlags: [] } };
+    const quietSnapshot = createDecisionSnapshot({ ...base, ranked: quiet });
+    const activeSnapshot = createDecisionSnapshot({ ...base, ranked: active });
+    assert.equal(quietSnapshot.evidence.newsBoost, 0);
+    assert.equal(activeSnapshot.evidence.newsBoost, 0.8);
+    const news = activeSnapshot.evidence.items?.find((item) => item.feature === "news");
+    assert.equal(news?.source, "news_fusion");
+    assert.equal(news?.direction, "positive");
+    assert.ok((news?.contribution ?? 0) > 0);
+  });
+
+  it("records source conflicts and supplied risk state", () => {
+    const riskState = { positionPctOfEquity: 0.02, tokenConcentrationPct: 0.02, chainExposurePct: 0.1, liquidityTakePct: 0.01, slippageBps: 12, dailyLossUsedPct: 0.03, hardLimitsHit: ["daily_loss"] };
+    const s = createDecisionSnapshot({
+      assetId: "cg:bitcoin", symbol: "BTC", decision: "REJECT", strategyId: "quality", strategyVersion: "1",
+      ranked: makeRanked(), riskState,
+      dataQuality: { priceFresh: true, dataAgeMs: 1_000, sourceReliability: 0.9, source: "coingecko", stalenessFlags: [], sourceConflict: true },
+    });
+    assert.ok(s.evidence.contradictorySignals >= 1);
+    assert.deepEqual(s.riskState, riskState);
+  });
+
   it("rejects look-ahead snapshots", () => {
     const ctx: DecisionContext = { assetId: "cg:bitcoin", symbol: "BTC", decision: "WAIT", strategyId: "x", strategyVersion: "1" };
     const s = createDecisionSnapshot(ctx);

@@ -1,6 +1,6 @@
 import { nowIso } from "../time.ts";
 import { clamp, num0 } from "../math.ts";
-import type { DecisionAction, DecisionContext, DecisionFeatures, DecisionSnapshot, EvidenceState, ExecutionAssumptions, MarketStructure, SizingInfo, DataQuality } from "./types.ts";
+import type { DecisionAction, DecisionContext, DecisionEvidenceItem, DecisionFeatures, DecisionSnapshot, EvidenceState, ExecutionAssumptions, MarketStructure, SizingInfo, DataQuality } from "./types.ts";
 
 export function rid(): string {
   return crypto.randomUUID();
@@ -103,15 +103,60 @@ export function buildEvidence(opts: {
   eventsNear: number;
   signalAgreement: number;
   contradictorySignals: number;
+  items?: DecisionEvidenceItem[];
 }): EvidenceState {
   return {
+    version: "1.0",
     newsBoost: clamp(num0(opts.newsBoost), 0, 1),
     socialBoost: clamp(num0(opts.socialBoost), 0, 1),
     walletHits: Math.max(0, Math.round(opts.walletHits)),
     eventsNear: Math.max(0, Math.round(opts.eventsNear)),
     signalAgreement: clamp(num0(opts.signalAgreement), 0, 1),
     contradictorySignals: Math.max(0, Math.round(opts.contradictorySignals)),
+    items: opts.items ?? [],
   };
+}
+
+function evidenceFromContext(ctx: DecisionContext, features: DecisionFeatures): EvidenceState {
+  if (ctx.evidence) return buildEvidence(ctx.evidence);
+  const observedAt = ctx.latestMarketDataTimestamp ?? ctx.ranked?.asset.observedAt ?? null;
+  const reliability = clamp(num0(ctx.dataQuality?.sourceReliability ?? ctx.ranked?.asset.sourceReliability ?? 0), 0, 1);
+  const stale = ctx.dataQuality?.priceFresh === false;
+  const values: Array<[string, number, number]> = [
+    ["market_quality", features.marketQuality, features.marketQuality - 0.5],
+    ["liquidity", features.liquidity, features.liquidity - 0.5],
+    ["momentum", features.momentum, features.momentum - 0.5],
+    ["volume_anomaly", features.volumeAnomaly, features.volumeAnomaly - 0.5],
+    ["smart_money", features.smartMoney, features.smartMoney - 0.5],
+    ["news", features.news, features.news],
+    ["social", features.social, features.social],
+    ["risk_penalty", features.riskPenalty, -features.riskPenalty],
+    ["execution_penalty", features.executionPenalty, -features.executionPenalty],
+  ];
+  const items: DecisionEvidenceItem[] = values.map(([feature, value, contribution]) => ({
+    source: feature === "news" ? "news_fusion" : feature === "social" ? "social_fusion" : (ctx.dataQuality?.source ?? ctx.ranked?.asset.source ?? "derived"),
+    feature,
+    value,
+    observedAt: feature === "news" ? (ctx.latestNewsTimestamp ?? observedAt) : feature === "social" ? (ctx.latestSocialTimestamp ?? observedAt) : observedAt,
+    status: stale ? "stale" : "available",
+    reliability,
+    contribution,
+    direction: contribution > 0.05 ? "positive" : contribution < -0.05 ? "negative" : "neutral",
+    contradiction: contribution < -0.05,
+    decisionImpact: contribution > 0.05 ? "supports entry" : contribution < -0.05 ? "opposes entry" : "neutral",
+  }));
+  const contradictions = items.filter((item) => item.contradiction).length + (ctx.dataQuality?.sourceConflict ? 1 : 0);
+  const positive = items.filter((item) => item.direction === "positive").length;
+  const directional = items.filter((item) => item.direction !== "neutral").length;
+  return buildEvidence({
+    newsBoost: features.news,
+    socialBoost: features.social,
+    walletHits: features.smartMoney > 0 ? Math.max(1, Math.round(features.smartMoney * 10)) : 0,
+    eventsNear: ctx.latestEventTimestamp ? 1 : 0,
+    signalAgreement: directional ? positive / directional : 0.5,
+    contradictorySignals: contradictions,
+    items,
+  });
 }
 
 export function buildSizing(opts: {
@@ -239,22 +284,8 @@ export function createDecisionSnapshot(
     features,
     marketStructure,
     regime: regimeObj as Record<string, string | number | boolean | null>,
-    evidence: ctx.dataQuality ? buildEvidence({
-        newsBoost: 0,
-        socialBoost: 0,
-        walletHits: 0,
-        eventsNear: 0,
-        signalAgreement: 0.5,
-        contradictorySignals: 0,
-      }) : buildEvidence({
-        newsBoost: 0,
-        socialBoost: 0,
-        walletHits: 0,
-        eventsNear: 0,
-        signalAgreement: 0.5,
-        contradictorySignals: 0,
-      }),
-    riskState: {
+    evidence: evidenceFromContext(ctx, features),
+    riskState: ctx.riskState ?? {
       positionPctOfEquity: 0,
       tokenConcentrationPct: 0,
       chainExposurePct: 0,
