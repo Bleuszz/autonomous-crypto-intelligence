@@ -24,6 +24,22 @@ Private repo: [github.com/Bleuszz/autonomous-crypto-intelligence](https://github
 
 X API keys live in gitignored `secrets/runtime.env`. The spend ledger is `secrets/x-budget.json` so a restart cannot reset the cap.
 
+## Learner controls
+
+The `/learning` dashboard is the control centre for the adaptive learner. It shows prediction counts, accuracy by action and confidence, reward analytics, regime/asset breakdowns, pattern intelligence, champion/challenger status, and a password-protected control panel.
+
+The learner can be in one of three server-persisted states:
+
+| State | Behaviour |
+| --- | --- |
+| `DISABLED` | Learner is not consulted; baseline deterministic system runs normally. |
+| `SHADOW` (default) | Learner records predictions and evaluates them, but does not influence paper trades. |
+| `ACTIVE` | Learner may override the paper-trading decision layer (currently `ENTER` → `REJECT`/`WAIT`) while still passing hard risk gates first. Live execution remains impossible. |
+
+State changes on `/learning` require the server-side control password. The password is read from `LEARNING_CONTROL_PASSWORD`; for local/private use the documented default is `1234` when no env var is set. The password is never rendered, logged, stored in the database, or sent to the browser. Change attempts are written to `learner_control_audit` without the password.
+
+See [docs/LEARNING.md](docs/LEARNING.md) for the full metrics reference.
+
 ## Trading mode
 
 | Mode | Status |

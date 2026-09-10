@@ -74,16 +74,21 @@ import {
   computeReward,
   ensureLearnerVersion,
   extractLesson,
+  getLearnerDashboard,
+  getLearnerOperatingState,
   getLearnerRecommendation,
-  getLearningDashboard,
+  setLearnerOperatingState,
   recordDecisionSnapshot,
   recordOutcomeFromFills,
   rid as learningRid,
   runLearningJobs,
+  jsonbField,
+  type DecisionAction,
   type DecisionContext,
   type DecisionSnapshot,
+  type LearnerDashboard,
+  type LearnerOperatingMode,
   type LearnerRecommendation,
-  type LearningDashboard,
 } from "./learning/index.ts";
 import { runResearch } from "./research";
 import { loadRuntimeSecrets } from "./secrets";
@@ -414,6 +419,7 @@ function entrySnapshotContext(
   signalId?: string | null,
   orderId?: string | null,
   learnerRec?: LearnerRecommendation | null,
+  actualDecision: DecisionAction = "ENTER",
 ): DecisionContext {
   const sizing = {
     equityUsd: equity,
@@ -450,7 +456,8 @@ function entrySnapshotContext(
   return {
     assetId: r.asset.id,
     symbol: r.asset.symbol,
-    decision: "ENTER",
+    decision: actualDecision,
+    baselineAction: "ENTER",
     side: "buy",
     strategyId: intent.strategyId,
     strategyVersion: "2.0.0",
@@ -463,7 +470,7 @@ function entrySnapshotContext(
     dataQuality,
     learnerRecommendation: learnerRec ?? null,
     confidence: intent.confidence,
-    notes: `Learner ${learnerRec ? learnerRec.action : "not consulted"}; gate ${gate.ok ? "ok" : "rejected"}`,
+    notes: `Baseline ENTER; actual ${actualDecision}; learner ${learnerRec ? learnerRec.action : "not consulted"}; gate ${gate.ok ? "ok" : "rejected"}`,
   };
 }
 
@@ -476,6 +483,7 @@ function exitSnapshotContext(
     assetId: intent.assetId,
     symbol: intent.symbol,
     decision: "EXIT",
+    baselineAction: "EXIT",
     side: "sell",
     strategyId: intent.strategyId,
     strategyVersion: "2.0.0",
@@ -498,6 +506,8 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
   const pRows = await sql.query<Record<string, unknown>>("select * from paper_portfolios where id = $1", [DEFAULT_PORTFOLIO_ID]);
   const p = pRows[0];
   if (!p) return;
+  const learnerState = await getLearnerOperatingState(sql);
+  const learnerMode = learnerState.mode;
   const posRows = await sql.query<Record<string, unknown>>("select * from positions where portfolio_id = $1", [DEFAULT_PORTFOLIO_ID]);
   const marks = new Map(ranked.map((r) => [r.asset.id, r.asset.priceUsd]));
   let cash = num0(p.cash_usd);
@@ -597,6 +607,7 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
               asset_id: string;
               symbol: string;
               decision: string;
+              baseline_action: string | null;
               side: string | null;
               action_at: string;
               strategy_id: string;
@@ -617,6 +628,7 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
                 assetId: snapRow.asset_id,
                 symbol: snapRow.symbol,
                 decision: snapRow.decision as DecisionSnapshot["decision"],
+                baselineAction: snapRow.baseline_action as DecisionSnapshot["baselineAction"],
                 side: snapRow.side as DecisionSnapshot["side"],
                 actionAt: snapRow.action_at,
                 strategyId: snapRow.strategy_id,
@@ -624,17 +636,17 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
                 learnerVersion: snapRow.learner_version,
                 signalId: snapRow.signal_id,
                 orderId: snapRow.order_id,
-                features: JSON.parse(snapRow.features) as DecisionSnapshot["features"],
-                marketStructure: JSON.parse(snapRow.market_structure) as DecisionSnapshot["marketStructure"],
-                regime: JSON.parse(snapRow.regime) as Record<string, string | number | boolean | null>,
-                evidence: JSON.parse(snapRow.evidence) as DecisionSnapshot["evidence"],
-                riskState: JSON.parse(snapRow.risk_state) as DecisionSnapshot["riskState"],
-                sizing: snapRow.sizing ? (JSON.parse(snapRow.sizing) as DecisionSnapshot["sizing"]) : null,
-                executionAssumptions: snapRow.execution_assumptions ? (JSON.parse(snapRow.execution_assumptions) as DecisionSnapshot["executionAssumptions"]) : null,
-                dataQuality: JSON.parse(snapRow.data_quality) as DecisionSnapshot["dataQuality"],
+                features: jsonbField<DecisionSnapshot["features"]>(snapRow.features) ?? ({} as DecisionSnapshot["features"]),
+                marketStructure: jsonbField<DecisionSnapshot["marketStructure"]>(snapRow.market_structure) ?? ({} as DecisionSnapshot["marketStructure"]),
+                regime: jsonbField<Record<string, string | number | boolean | null>>(snapRow.regime) ?? {},
+                evidence: jsonbField<DecisionSnapshot["evidence"]>(snapRow.evidence) ?? ({} as DecisionSnapshot["evidence"]),
+                riskState: jsonbField<DecisionSnapshot["riskState"]>(snapRow.risk_state) ?? ({} as DecisionSnapshot["riskState"]),
+                sizing: jsonbField<DecisionSnapshot["sizing"]>(snapRow.sizing),
+                executionAssumptions: jsonbField<DecisionSnapshot["executionAssumptions"]>(snapRow.execution_assumptions),
+                dataQuality: jsonbField<DecisionSnapshot["dataQuality"]>(snapRow.data_quality) ?? ({} as DecisionSnapshot["dataQuality"]),
                 expectedValue: snapRow.expected_value,
                 confidence: snapRow.confidence,
-                learnerRecommendation: snapRow.learner_recommendation ? (JSON.parse(snapRow.learner_recommendation) as DecisionSnapshot["learnerRecommendation"]) : null,
+                learnerRecommendation: jsonbField<DecisionSnapshot["learnerRecommendation"]>(snapRow.learner_recommendation),
                 notes: snapRow.notes,
                 createdAt: snapRow.action_at,
               };
@@ -760,6 +772,41 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
       );
       continue;
     }
+    let learnerRec: LearnerRecommendation | null = null;
+    let actualDecision: DecisionAction = "ENTER";
+    if (learnerMode !== "DISABLED") {
+      try {
+        const baseCtx = entrySnapshotContext(r, intent, fill, gate, equity, cash, dayAnchor, null, oid, null);
+        const rec = await getLearnerRecommendation(sql, baseCtx);
+        learnerRec = rec.recommendation;
+        if (learnerMode === "ACTIVE" && learnerRec.action !== "ENTER") {
+          actualDecision = learnerRec.action;
+        }
+      } catch (e) {
+        if (process.env.NODE_ENV !== "production") {
+          console.error("[learning] failed to consult learner:", e instanceof Error ? e.message : e);
+        }
+      }
+    }
+
+    if (actualDecision !== "ENTER") {
+      // ACTIVE mode: learner overrode the baseline. Record the non-enter snapshot and skip execution.
+      try {
+        const ctx = entrySnapshotContext(r, intent, fill, gate, equity, cash, dayAnchor, null, oid, learnerRec, actualDecision);
+        await recordDecisionSnapshot(sql, ctx);
+      } catch (e) {
+        if (process.env.NODE_ENV !== "production") {
+          console.error("[learning] failed to record learner-override snapshot:", e instanceof Error ? e.message : e);
+        }
+      }
+      await sql.query(
+        `insert into alerts (id, kind, severity, title, body, asset_id, created_at, channel)
+         values ($1,'paper_trade','info',$2,$3,$4,now(),'in-app')`,
+        [rid(), `Learner override ${r.asset.symbol}`, `Baseline ENTER blocked by learner ${actualDecision} (${intent.strategyId})`, intent.assetId],
+      );
+      continue;
+    }
+
     cash -= cost;
     await sql.query(
       `insert into paper_orders (id, portfolio_id, asset_id, side, type, status, requested_notional_usd, submitted_at, available_at, reason, latency_ms, assumed_mid)
@@ -789,11 +836,9 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
       /* optional columns */
     }
     held.add(intent.assetId);
-    // Learning: record ENTER decision snapshot (shadow learner consulted before acting).
+    // Learning: record the executed decision snapshot with the learner recommendation consulted before acting.
     try {
-      const baseCtx = entrySnapshotContext(r, intent, fill, gate, equity, cash, dayAnchor, null, oid, null);
-      const learnerRec = await getLearnerRecommendation(sql, baseCtx);
-      const ctx = entrySnapshotContext(r, intent, fill, gate, equity, cash, dayAnchor, null, oid, learnerRec.recommendation);
+      const ctx = entrySnapshotContext(r, intent, fill, gate, equity, cash, dayAnchor, null, oid, learnerRec, "ENTER");
       await recordDecisionSnapshot(sql, ctx);
     } catch (e) {
       /* learning schema may not be ready; do not break paper trading */
@@ -1656,9 +1701,28 @@ export async function getWallets(): Promise<{ wallets: WalletDTO[]; txs: WalletT
 export async function getPaper(): Promise<PortfolioDTO> {
   return (await ensureIngested(false)).portfolio;
 }
-export async function getLearningDashboardData(): Promise<LearningDashboard> {
-  await ensureIngested(false);
-  return getLearningDashboard();
+export async function getLearningDashboardData(): Promise<LearnerDashboard> {
+  // The dashboard reads the already-persisted learner state; it does not need
+  // to block on a fresh ingest cycle.
+  return getLearnerDashboard();
+}
+
+export async function getLearnerModeData(): Promise<{ mode: LearnerOperatingMode; updatedAt: string | null }> {
+  const sql = await getSql();
+  return getLearnerOperatingState(sql);
+}
+
+export async function changeLearnerModeData(input: {
+  mode: LearnerOperatingMode;
+  password: string;
+}): Promise<{ ok: boolean; mode: LearnerOperatingMode; error?: string }> {
+  const sql = await getSql();
+  const result = await setLearnerOperatingState(sql, {
+    requestedMode: input.mode,
+    password: input.password,
+    clientContext: { source: "web_dashboard" },
+  });
+  return { ok: result.ok, mode: result.mode, error: result.error };
 }
 export async function getSystem(): Promise<SystemDTO> {
   const o = await ensureIngested(false);

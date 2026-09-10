@@ -2,6 +2,7 @@ import type { RankedOpportunity, RegimeDTO, SignalDTO } from "../types.ts";
 import type { TradeIntent, RegimeInput } from "../engine.ts";
 
 export type DecisionAction = "ENTER" | "WAIT" | "REJECT" | "EXIT";
+export type LearnerOperatingMode = "DISABLED" | "SHADOW" | "ACTIVE";
 export type Contribution = "STRONGLY_POSITIVE" | "POSITIVE" | "NEUTRAL" | "NEGATIVE" | "STRONGLY_NEGATIVE";
 export type AvoidableLoss = "AVOIDABLE" | "PROBABLY_UNAVOIDABLE" | "INSUFFICIENT_EVIDENCE";
 export type DecisionOutcomeClass = "GOOD_GOOD" | "GOOD_BAD" | "BAD_GOOD" | "BAD_BAD";
@@ -102,6 +103,7 @@ export type DecisionContext = {
   assetId: string;
   symbol: string;
   decision: DecisionAction;
+  baselineAction?: DecisionAction;
   side?: "buy" | "sell";
   strategyId: string;
   strategyVersion: string;
@@ -127,6 +129,7 @@ export type DecisionSnapshot = {
   assetId: string;
   symbol: string;
   decision: DecisionAction;
+  baselineAction: DecisionAction | null;
   side: "buy" | "sell" | null;
   actionAt: string;
   strategyId: string;
@@ -342,6 +345,142 @@ export type ChampionChallengerMetrics = {
   tradesByRegime: Record<string, { n: number; avgReturn: number }>;
   tradesByAsset: Record<string, { n: number; avgReturn: number }>;
   costSensitivity: Record<string, number>;
+};
+
+export type LearnerOperatingState = {
+  mode: LearnerOperatingMode;
+  updatedAt: string | null;
+};
+
+export type LearnerControlAudit = {
+  id: string;
+  changedAt: string;
+  previousState: LearnerOperatingMode;
+  newState: LearnerOperatingMode;
+  action: string;
+  success: boolean;
+  reason: string | null;
+  clientContext: SerializableRecord;
+};
+
+export type LearnerPrediction = {
+  snapshotId: string;
+  assetId: string;
+  symbol: string;
+  actionAt: string;
+  learnerVersion: string;
+  baselineAction: DecisionAction;
+  predictedAction: DecisionAction;
+  confidence: number;
+  expectedReward: number;
+  actualReward: number | null;
+  actualReturnPct: number | null;
+  correct: boolean | null;
+  resolved: boolean;
+  regime: string | null;
+};
+
+export type LearnerActionStats = {
+  action: DecisionAction;
+  predictions: number;
+  resolved: number;
+  correct: number;
+  incorrect: number;
+  accuracy: number | null;
+  avgConfidence: number | null;
+  avgReward: number | null;
+};
+
+export type LearnerConfidenceBucket = {
+  bucket: string;
+  predictions: number;
+  resolved: number;
+  accuracy: number | null;
+  avgReward: number | null;
+  avgConfidence: number;
+};
+
+export type LearnerRegimeStats = {
+  regime: string;
+  predictions: number;
+  resolved: number;
+  accuracy: number | null;
+  avgReward: number | null;
+};
+
+export type LearnerAssetStats = {
+  assetId: string;
+  symbol: string;
+  predictions: number;
+  resolved: number;
+  accuracy: number | null;
+  avgReward: number | null;
+};
+
+export type LearnerTimePoint = {
+  t: string;
+  accuracy: number | null;
+  avgReward: number | null;
+  cumulativeReward: number;
+  volume: number;
+};
+
+export type LearnerBaselineComparison = {
+  baselinePredictions: number;
+  baselineResolved: number;
+  baselineAccuracy: number | null;
+  baselineAvgReward: number | null;
+  learnerPredictions: number;
+  learnerResolved: number;
+  learnerAccuracy: number | null;
+  learnerAvgReward: number | null;
+  agreement: number;
+  disagreement: number;
+  disagreementAvgBaselineReward: number | null;
+  insufficientEvidence: boolean;
+};
+
+export type LearnerPredictionStats = {
+  totalPredictions: number;
+  resolvedPredictions: number;
+  unresolvedPredictions: number;
+  correctPredictions: number;
+  incorrectPredictions: number;
+  overallAccuracy: number | null;
+  avgReward: number | null;
+  medianReward: number | null;
+  rewardVariance: number | null;
+  positiveRewardRate: number | null;
+  negativeRewardRate: number | null;
+  cumulativeReward: number;
+  byAction: LearnerActionStats[];
+  byConfidence: LearnerConfidenceBucket[];
+  byRegime: LearnerRegimeStats[];
+  byAsset: LearnerAssetStats[];
+  rewardByAction: Array<{ action: string; avgReward: number | null; count: number }>;
+  rewardByConfidence: Array<{ bucket: string; avgReward: number | null; count: number }>;
+  timeSeries: LearnerTimePoint[];
+  baselineComparison: LearnerBaselineComparison;
+};
+
+export type LearnerHealthStatus = "HEALTHY" | "WARNING" | "ERROR";
+
+export type LearnerHealth = {
+  experienceIngestion: LearnerHealthStatus;
+  outcomeResolution: LearnerHealthStatus;
+  patternDiscovery: LearnerHealthStatus;
+  learnerEvaluation: LearnerHealthStatus;
+  predictionResolutionLag: string | null;
+  dataFreshness: string | null;
+  diagnostics: string[];
+};
+
+export type LearnerDashboard = LearningDashboard & {
+  mode: LearnerOperatingState;
+  stats: LearnerPredictionStats;
+  recentPredictions: LearnerPrediction[];
+  health: LearnerHealth;
+  controlAudit: LearnerControlAudit[];
 };
 
 export type LearningDashboard = {

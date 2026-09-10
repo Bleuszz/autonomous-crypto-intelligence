@@ -217,6 +217,7 @@ export function createDecisionSnapshot(
     assetId: ctx.assetId,
     symbol: ctx.symbol,
     decision: ctx.decision,
+    baselineAction: ctx.baselineAction ?? ctx.decision ?? null,
     side: ctx.side ?? null,
     actionAt: ctx.actionAt ?? nowIso(),
     strategyId: ctx.strategyId,

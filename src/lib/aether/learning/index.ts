@@ -7,7 +7,39 @@ import { computeReward } from "./reward.ts";
 import { discoverPatterns, MIN_PATTERN_SAMPLES, promotePattern, rejectPattern } from "./patterns.ts";
 import { createLearnerVersion, DEFAULT_LEARNER_VERSION, DEFAULT_STRATEGY_ID, DEFAULT_STRATEGY_VERSION, recommendAction } from "./learner.ts";
 import { createStrategyCandidate } from "./promotion.ts";
-import type { DecisionContext, DecisionSnapshot, DiscoveredPattern, FeatureAttribution, LearnerRecommendation, LearnerVersion, LearningDashboard, LearningOverview, Lesson, StrategyCandidate, TradeOutcome, TradeReward } from "./types.ts";
+import {
+  getLearnerControlAudit,
+  getLearnerHealth,
+  getLearnerOperatingState,
+  getLearnerPassword,
+  getLearnerPredictionStats,
+  getLearnerRecentPredictions,
+  jsonbField,
+  setLearnerOperatingState,
+} from "./controls.ts";
+import type {
+  DecisionAction,
+  DecisionContext,
+  DecisionSnapshot,
+  DiscoveredPattern,
+  FeatureAttribution,
+  LearnerActionStats,
+  LearnerControlAudit,
+  LearnerDashboard,
+  LearnerHealth,
+  LearnerOperatingMode,
+  LearnerOperatingState,
+  LearnerPrediction,
+  LearnerPredictionStats,
+  LearnerRecommendation,
+  LearnerVersion,
+  LearningDashboard,
+  LearningOverview,
+  Lesson,
+  StrategyCandidate,
+  TradeOutcome,
+  TradeReward,
+} from "./types.ts";
 
 const DEFAULT_PORTFOLIO_ID = "paper-default";
 
@@ -19,13 +51,13 @@ export async function recordDecisionSnapshot(sql: Sql, ctx: DecisionContext): Pr
   const snapshot = createDecisionSnapshot(ctx, DEFAULT_LEARNER_VERSION);
   await sql.query(
     `insert into trade_decision_snapshots (
-       id, portfolio_id, asset_id, symbol, decision, side, action_at, strategy_id, strategy_version,
+       id, portfolio_id, asset_id, symbol, decision, baseline_action, side, action_at, strategy_id, strategy_version,
        learner_version, signal_id, order_id, features, market_structure, regime, evidence, risk_state,
        sizing, execution_assumptions, data_quality, expected_value, confidence, learner_recommendation, notes
-     ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13::jsonb,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb,$18::jsonb,$19::jsonb,$20::jsonb,$21,$22,$23::jsonb,$24)`,
+     ) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14::jsonb,$15::jsonb,$16::jsonb,$17::jsonb,$18::jsonb,$19::jsonb,$20::jsonb,$21::jsonb,$22,$23,$24::jsonb,$25)`,
     [
-      snapshot.id, snapshot.portfolioId, snapshot.assetId, snapshot.symbol, snapshot.decision, snapshot.side,
-      snapshot.actionAt, snapshot.strategyId, snapshot.strategyVersion, snapshot.learnerVersion,
+      snapshot.id, snapshot.portfolioId, snapshot.assetId, snapshot.symbol, snapshot.decision, snapshot.baselineAction,
+      snapshot.side, snapshot.actionAt, snapshot.strategyId, snapshot.strategyVersion, snapshot.learnerVersion,
       snapshot.signalId, snapshot.orderId, serialize(snapshot.features), serialize(snapshot.marketStructure),
       serialize(snapshot.regime), serialize(snapshot.evidence), serialize(snapshot.riskState), serialize(snapshot.sizing),
       serialize(snapshot.executionAssumptions), serialize(snapshot.dataQuality), snapshot.expectedValue,
@@ -149,6 +181,7 @@ export async function loadCompletedExperiences(sql: Sql, limit = 500): Promise<A
     s_asset_id: string;
     s_symbol: string;
     s_decision: string;
+    s_baseline_action: string | null;
     s_side: string | null;
     s_action_at: string;
     s_strategy_id: string;
@@ -198,7 +231,7 @@ export async function loadCompletedExperiences(sql: Sql, limit = 500): Promise<A
   }>(
     `select
       s.id as s_id, s.portfolio_id as s_portfolio_id, s.asset_id as s_asset_id, s.symbol as s_symbol,
-      s.decision as s_decision, s.side as s_side, s.action_at as s_action_at, s.strategy_id as s_strategy_id,
+      s.decision as s_decision, s.baseline_action as s_baseline_action, s.side as s_side, s.action_at as s_action_at, s.strategy_id as s_strategy_id,
       s.strategy_version as s_strategy_version, s.learner_version as s_learner_version, s.signal_id as s_signal_id,
       s.order_id as s_order_id, s.features as s_features, s.market_structure as s_market_structure,
       s.regime as s_regime, s.evidence as s_evidence, s.risk_state as s_risk_state, s.sizing as s_sizing,
@@ -231,6 +264,7 @@ export async function loadCompletedExperiences(sql: Sql, limit = 500): Promise<A
       assetId: r.s_asset_id,
       symbol: r.s_symbol,
       decision: r.s_decision as DecisionSnapshot["decision"],
+      baselineAction: r.s_baseline_action as DecisionSnapshot["baselineAction"],
       side: r.s_side as DecisionSnapshot["side"],
       actionAt: r.s_action_at,
       strategyId: r.s_strategy_id,
@@ -238,17 +272,17 @@ export async function loadCompletedExperiences(sql: Sql, limit = 500): Promise<A
       learnerVersion: r.s_learner_version,
       signalId: r.s_signal_id,
       orderId: r.s_order_id,
-      features: JSON.parse(r.s_features) as DecisionSnapshot["features"],
-      marketStructure: JSON.parse(r.s_market_structure) as DecisionSnapshot["marketStructure"],
-      regime: JSON.parse(r.s_regime) as Record<string, string | number | boolean | null>,
-      evidence: JSON.parse(r.s_evidence) as DecisionSnapshot["evidence"],
-      riskState: JSON.parse(r.s_risk_state) as DecisionSnapshot["riskState"],
-      sizing: r.s_sizing ? (JSON.parse(r.s_sizing) as DecisionSnapshot["sizing"]) : null,
-      executionAssumptions: r.s_execution_assumptions ? (JSON.parse(r.s_execution_assumptions) as DecisionSnapshot["executionAssumptions"]) : null,
-      dataQuality: JSON.parse(r.s_data_quality) as DecisionSnapshot["dataQuality"],
+      features: jsonbField<DecisionSnapshot["features"]>(r.s_features) ?? ({} as DecisionSnapshot["features"]),
+      marketStructure: jsonbField<DecisionSnapshot["marketStructure"]>(r.s_market_structure) ?? ({} as DecisionSnapshot["marketStructure"]),
+      regime: jsonbField<Record<string, string | number | boolean | null>>(r.s_regime) ?? {},
+      evidence: jsonbField<DecisionSnapshot["evidence"]>(r.s_evidence) ?? ({} as DecisionSnapshot["evidence"]),
+      riskState: jsonbField<DecisionSnapshot["riskState"]>(r.s_risk_state) ?? ({} as DecisionSnapshot["riskState"]),
+      sizing: jsonbField<DecisionSnapshot["sizing"]>(r.s_sizing),
+      executionAssumptions: jsonbField<DecisionSnapshot["executionAssumptions"]>(r.s_execution_assumptions),
+      dataQuality: jsonbField<DecisionSnapshot["dataQuality"]>(r.s_data_quality) ?? ({} as DecisionSnapshot["dataQuality"]),
       expectedValue: r.s_expected_value,
       confidence: r.s_confidence,
-      learnerRecommendation: r.s_learner_recommendation ? (JSON.parse(r.s_learner_recommendation) as DecisionSnapshot["learnerRecommendation"]) : null,
+      learnerRecommendation: jsonbField<DecisionSnapshot["learnerRecommendation"]>(r.s_learner_recommendation),
       notes: r.s_notes,
       createdAt: r.s_action_at,
     },
@@ -357,7 +391,7 @@ export async function getLearnerRecommendation(sql: Sql, ctx: DecisionContext): 
     patternHash: "",
     status: r.status as DiscoveredPattern["status"],
     description: "",
-    conditions: JSON.parse(r.conditions) as Record<string, string | number | boolean>,
+    conditions: (jsonbField<Record<string, string | number | boolean>>(r.conditions) ?? {}) as Record<string, string | number | boolean>,
     action: r.action as DiscoveredPattern["action"],
     regime: null,
     assetScope: null,
@@ -385,6 +419,23 @@ export async function getLearnerRecommendation(sql: Sql, ctx: DecisionContext): 
 
   const recommendation = recommendAction({ snapshot, patterns });
   return { recommendation, learnerVersion: DEFAULT_LEARNER_VERSION };
+}
+
+async function getLearnerDashboard(): Promise<LearnerDashboard> {
+  const sql = await getSql();
+  await ensureLearnerVersion(sql);
+  await runLearningJobs(sql);
+
+  const [base, mode, stats, recent, health, audit] = await Promise.all([
+    getLearningDashboard(),
+    getLearnerOperatingState(sql),
+    getLearnerPredictionStats(sql),
+    getLearnerRecentPredictions(sql, 50),
+    getLearnerHealth(sql),
+    getLearnerControlAudit(sql, 20),
+  ]);
+
+  return { ...base, mode, stats, recentPredictions: recent, health, controlAudit: audit };
 }
 
 export async function ensureLearnerVersion(sql: Sql): Promise<void> {
@@ -552,5 +603,43 @@ async function loadAttributions(sql: Sql, rewardId: string): Promise<FeatureAttr
   }));
 }
 
-export { buildDataQuality, buildExecutionAssumptions, buildSizing, createDecisionSnapshot, rid, computeReward, computeFeatureAttributions, recommendAction, promotePattern, rejectPattern, extractLesson };
-export type { DecisionContext, DecisionSnapshot, LearnerRecommendation, TradeReward, TradeOutcome, DiscoveredPattern, LearningDashboard };
+export {
+  buildDataQuality,
+  buildExecutionAssumptions,
+  buildSizing,
+  createDecisionSnapshot,
+  rid,
+  computeReward,
+  computeFeatureAttributions,
+  recommendAction,
+  promotePattern,
+  rejectPattern,
+  extractLesson,
+  getLearnerDashboard,
+  getLearnerOperatingState,
+  setLearnerOperatingState,
+  getLearnerControlAudit,
+  getLearnerPredictionStats,
+  getLearnerRecentPredictions,
+  getLearnerHealth,
+  getLearnerPassword,
+  jsonbField,
+};
+export type {
+  DecisionAction,
+  DecisionContext,
+  DecisionSnapshot,
+  LearnerRecommendation,
+  TradeReward,
+  TradeOutcome,
+  DiscoveredPattern,
+  LearningDashboard,
+  LearnerDashboard,
+  LearnerOperatingMode,
+  LearnerOperatingState,
+  LearnerPrediction,
+  LearnerPredictionStats,
+  LearnerActionStats,
+  LearnerControlAudit,
+  LearnerHealth,
+};

@@ -155,9 +155,40 @@ The estimate is a weighted average of matching patterns, where weights combine:
 
 Confidence is bounded by the number and similarity of matching patterns. The learner is fully deterministic and reproducible.
 
+## Learner operating states
+
+The learner has three explicit operating states persisted server-side:
+
+- `DISABLED` — the learner is not consulted and no predictions are recorded. The baseline deterministic trading system continues normally.
+- `SHADOW` (default) — the learner observes every decision, generates predictions, records them, and evaluates them later, but it does **not** influence execution.
+- `ACTIVE` — the learner may influence the paper-trading decision layer. In the current implementation an `ACTIVE` learner that recommends `REJECT` or `WAIT` overrides the baseline `ENTER` for that cycle. It never bypasses hard risk gates and it never triggers live execution.
+
+## Password-protected manual controls
+
+The `/learning` dashboard exposes controls to switch between `DISABLED`, `SHADOW`, and `ACTIVE`. Every state change requires a server-side password check.
+
+- The password is read from the server-side environment variable `LEARNING_CONTROL_PASSWORD`.
+- If the variable is not set, the local-only default documented for this private application is `1234`.
+- The password is never rendered in the UI, never logged, never stored in the database, and never sent to the browser as configuration.
+- Every change attempt is recorded in `learner_control_audit` with previous/new state, success/failure, action, and reason. The password itself is never written anywhere.
+
+Set a production password by creating `secrets/learning.env` (gitignored) or by exporting `LEARNING_CONTROL_PASSWORD` in the runtime environment.
+
+## Prediction tracking and evaluation
+
+Each snapshot that includes a learner recommendation becomes a prediction record. A prediction stores:
+
+- baseline action (the deterministic strategy's action)
+- predicted learner action (`ENTER` / `WAIT` / `REJECT`)
+- confidence and expected reward at decision time
+- actual reward after the round-trip resolves
+- correctness: `ENTER`/`WAIT` are treated as positive predictions; `REJECT` is treated as a negative prediction
+
+Predictions are evaluated only after the trade outcome is available, so the learner cannot train on future information.
+
 ## Shadow mode and promotion pipeline
 
-The learner starts in `SHADOW` mode. It records predictions next to every decision but does not change behaviour.
+The learner version starts in `SHADOW` mode. It records predictions next to every decision but does not change behaviour.
 
 A learned change must pass:
 
@@ -171,11 +202,20 @@ At each gate the system checks sample counts, OOS performance, walk-forward stab
 
 The `/learning` route shows:
 
-- learner version, status, champion/challenger versions
-- number of experiences, positive/negative reward counts, average reward
-- discovered patterns with sample counts, win rates, expectancy, and status
-- strong trades with positive feature attributions
-- weak trades with negative attributions and avoidable-loss labels
+- current learner operating mode (`DISABLED` / `SHADOW` / `ACTIVE`) and password-protected controls
+- total, resolved, and unresolved prediction counts
+- prediction accuracy and average reward
+- action-specific accuracy (`ENTER`, `WAIT`, `REJECT`)
+- confidence calibration buckets
+- recent predictions with baseline action, agreement, actual reward, and correctness
+- accuracy, average reward, cumulative reward, and volume charts over time
+- learner vs baseline comparison
+- performance by regime and by asset
+- pattern intelligence with sample size, expectancy, OOS expectancy, walk-forward stability, and status
+- extracted lessons with confidence labels
+- champion / challenger status
+- learning health diagnostics
+- auditable control change log
 
 ## Research report
 
