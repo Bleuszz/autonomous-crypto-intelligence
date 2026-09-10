@@ -23,6 +23,7 @@ import { Route as SocialRouteImport } from './routes/social'
 import { Route as StrategiesRouteImport } from './routes/strategies'
 import { Route as SystemRouteImport } from './routes/system'
 import { Route as WalletsRouteImport } from './routes/wallets'
+import { Route as XIntelligenceRouteImport } from './routes/x-intelligence'
 import { Route as TokenAssetIdRouteImport } from './routes/token.$assetId'
 
 const IndexRoute = IndexRouteImport.update({
@@ -95,6 +96,11 @@ const WalletsRoute = WalletsRouteImport.update({
   path: '/wallets',
   getParentRoute: () => rootRouteImport,
 } as any)
+const XIntelligenceRoute = XIntelligenceRouteImport.update({
+  id: '/x-intelligence',
+  path: '/x-intelligence',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const TokenAssetIdRoute = TokenAssetIdRouteImport.update({
   id: '/token/$assetId',
   path: '/token/$assetId',
@@ -116,6 +122,7 @@ export interface FileRoutesByFullPath {
   '/strategies': typeof StrategiesRoute
   '/system': typeof SystemRoute
   '/wallets': typeof WalletsRoute
+  '/x-intelligence': typeof XIntelligenceRoute
   '/token/$assetId': typeof TokenAssetIdRoute
 }
 export interface FileRoutesByTo {
@@ -133,6 +140,7 @@ export interface FileRoutesByTo {
   '/strategies': typeof StrategiesRoute
   '/system': typeof SystemRoute
   '/wallets': typeof WalletsRoute
+  '/x-intelligence': typeof XIntelligenceRoute
   '/token/$assetId': typeof TokenAssetIdRoute
 }
 export interface FileRoutesById {
@@ -151,6 +159,7 @@ export interface FileRoutesById {
   '/strategies': typeof StrategiesRoute
   '/system': typeof SystemRoute
   '/wallets': typeof WalletsRoute
+  '/x-intelligence': typeof XIntelligenceRoute
   '/token/$assetId': typeof TokenAssetIdRoute
 }
 export interface FileRouteTypes {
@@ -170,6 +179,7 @@ export interface FileRouteTypes {
     | '/strategies'
     | '/system'
     | '/wallets'
+    | '/x-intelligence'
     | '/token/$assetId'
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -187,6 +197,7 @@ export interface FileRouteTypes {
     | '/strategies'
     | '/system'
     | '/wallets'
+    | '/x-intelligence'
     | '/token/$assetId'
   id:
     | '__root__'
@@ -204,6 +215,7 @@ export interface FileRouteTypes {
     | '/strategies'
     | '/system'
     | '/wallets'
+    | '/x-intelligence'
     | '/token/$assetId'
   fileRoutesById: FileRoutesById
 }
@@ -222,6 +234,7 @@ export interface RootRouteChildren {
   StrategiesRoute: typeof StrategiesRoute
   SystemRoute: typeof SystemRoute
   WalletsRoute: typeof WalletsRoute
+  XIntelligenceRoute: typeof XIntelligenceRoute
   TokenAssetIdRoute: typeof TokenAssetIdRoute
 }
 
@@ -325,6 +338,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WalletsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/x-intelligence': {
+      id: '/x-intelligence'
+      path: '/x-intelligence'
+      fullPath: '/x-intelligence'
+      preLoaderRoute: typeof XIntelligenceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/token/$assetId': {
       id: '/token/$assetId'
       path: '/token/$assetId'
@@ -350,6 +370,7 @@ const rootRouteChildren: RootRouteChildren = {
   StrategiesRoute: StrategiesRoute,
   SystemRoute: SystemRoute,
   WalletsRoute: WalletsRoute,
+  XIntelligenceRoute: XIntelligenceRoute,
   TokenAssetIdRoute: TokenAssetIdRoute,
 }
 export const routeTree = rootRouteImport

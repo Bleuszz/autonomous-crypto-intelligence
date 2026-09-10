@@ -93,6 +93,7 @@ import {
 import { runResearch } from "./research";
 import { loadRuntimeSecrets } from "./secrets";
 import { startDeskScheduler } from "./scheduler";
+import { getXIntelligence, startXMarketStream } from "./x-market-intelligence";
 import {
   X_DAILY_CAP,
   X_SEARCH_QUERY,
@@ -1639,6 +1640,7 @@ if (typeof window === "undefined") {
       console.error("[aether] scheduled ingest failed:", err instanceof Error ? err.message : err);
     });
   });
+  void startXMarketStream();
 }
 
 export async function getOverview(): Promise<OverviewDTO> {
@@ -1730,6 +1732,10 @@ export async function changeLearnerModeData(input: {
   });
   return { ok: result.ok, mode: result.mode, error: result.error };
 }
+export async function getXIntelligenceDashboard() {
+  return getXIntelligence();
+}
+
 export async function getSystem(): Promise<SystemDTO> {
   const o = await ensureIngested(false);
   const sql = await getSql();

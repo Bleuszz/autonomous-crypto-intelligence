@@ -18,7 +18,7 @@ Private repo: [github.com/Bleuszz/autonomous-crypto-intelligence](https://github
 - Walk-forward backtests on Kraken daily candles with buy-and-hold benchmark, random baseline, and rolling windows
 - Reward + adaptive learning engine: immutable decision/outcome snapshots, normalized reward decomposition, feature attribution, pattern discovery with sample-size gating, shadow-mode contextual learner, champion/challenger promotion pipeline with rollback
 - Optional Grok research reports split into FACT / INFERENCE / UNCERTAINTY / SPECULATION
-- Official X recent-search on a hard **$5/week** budget (8 calls/day, 3 hours apart)
+- Optional real-time X filtered-stream monitoring of a compact, high-value, tiered watchlist with market-impact scoring and latency measurement
 - Extra free tapes: OKX/Binance funding, DefiLlama TVL, mempool fees, Reddit, extra RSS, DXY/SPX/gold, CoinCap
 - Private 08:00 / 20:00 Europe/London desk notes (recipient never shown on this public site)
 
@@ -74,6 +74,7 @@ npm run dev
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Event + Wallet Intelligence](docs/EVENTS_WALLET_INTELLIGENCE.md)
 - [Reward + Adaptive Learning Engine](docs/LEARNING.md)
+- [X/Twitter Market-Moving Intelligence](docs/X_MARKET_INTELLIGENCE.md)
 
 ## Honesty
 

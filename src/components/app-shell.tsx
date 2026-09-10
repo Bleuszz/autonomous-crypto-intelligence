@@ -11,6 +11,7 @@ import {
   Menu,
   Newspaper,
   Radar,
+  Radio,
   ShieldAlert,
   Siren,
   Wallet,
@@ -39,6 +40,7 @@ const NAV = [
       { to: "/polymarket", label: "Polymarket", icon: Landmark },
       { to: "/wallets", label: "Wallets", icon: Wallet },
       { to: "/copy-signals", label: "Copy signals", icon: Activity },
+      { to: "/x-intelligence", label: "X intelligence", icon: Radio },
     ],
   },
   {
