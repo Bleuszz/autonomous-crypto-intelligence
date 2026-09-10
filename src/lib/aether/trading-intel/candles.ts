@@ -28,10 +28,6 @@ export function assertNoLookahead(candles: Ohlcv[], decisionIso: string): boolea
   return candles.every((c) => c.t <= cutoff);
 }
 
-export function closes(candles: Ohlcv[]): number[] {
-  return candles.map((c) => c.c);
-}
-
 export function typicalPrice(c: Ohlcv): number {
   return (c.h + c.l + c.c) / 3;
 }
