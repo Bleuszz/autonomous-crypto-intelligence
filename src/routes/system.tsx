@@ -39,6 +39,28 @@ function SystemPage() {
       </div>
 
       <section className="mb-6 rounded-xl border border-border bg-card p-5">
+        <h2 className="text-sm font-medium">Seven-day runtime</h2>
+        <dl className="mt-3 grid gap-2 text-sm sm:grid-cols-2 lg:grid-cols-4">
+          <div><dt className="text-muted-foreground">Experiment</dt><dd className="font-mono text-xs">{String(s.runtime.experiment?.id ?? "not initialized")}</dd></div>
+          <div><dt className="text-muted-foreground">Started</dt><dd className="font-mono text-xs">{String(s.runtime.experiment?.started_at ?? "—")}</dd></div>
+          <div><dt className="text-muted-foreground">Assets</dt><dd>{String(s.runtime.metrics.assets ?? 0)}</dd></div>
+          <div><dt className="text-muted-foreground">Decisions</dt><dd>{String(s.runtime.metrics.decisions ?? 0)}</dd></div>
+          <div><dt className="text-muted-foreground">Open positions</dt><dd>{String(s.runtime.metrics.open_positions ?? 0)}</dd></div>
+          <div><dt className="text-muted-foreground">Completed trades</dt><dd>{String(s.runtime.metrics.completed_trades ?? 0)}</dd></div>
+          <div><dt className="text-muted-foreground">Resolved experiences</dt><dd>{String(s.runtime.metrics.resolved_experiences ?? 0)}</dd></div>
+          <div><dt className="text-muted-foreground">Interruptions</dt><dd>{String(s.runtime.experiment?.interruption_count ?? 0)}</dd></div>
+        </dl>
+        <ul className="mt-4 grid gap-2 sm:grid-cols-2">
+          {s.runtime.heartbeats.map((h) => (
+            <li key={String(h.job)} className="flex items-center justify-between rounded-md border border-border px-3 py-2 text-xs">
+              <span>{String(h.job)}</span>
+              <span className="font-mono text-muted-foreground">{String(h.status)} · {String(h.last_success_at ?? h.last_attempt_at ?? "—")}</span>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section className="mb-6 rounded-xl border border-border bg-card p-5">
         <h2 className="text-sm font-medium">Private desk notes</h2>
         <p className="mt-1 text-sm text-muted-foreground">{s.digestSchedule}</p>
         <p className="mt-2 font-mono text-xs text-muted-foreground">

@@ -419,4 +419,30 @@ export type SystemDTO = {
   pollMs: number;
   lastDigestAt: string | null;
   digestSchedule: string;
+  runtime: {
+    experiment: {
+      id: string;
+      started_at: string;
+      starting_equity_usd: number;
+      starting_open_positions: number;
+      starting_completed_trades: number;
+      starting_resolved_experiences: number;
+      interruption_count: number;
+    } | null;
+    heartbeats: {
+      job: string;
+      status: string;
+      started_at: string | null;
+      last_attempt_at: string | null;
+      last_success_at: string | null;
+      updated_at: string;
+    }[];
+    metrics: {
+      assets: number;
+      decisions: number;
+      completed_trades: number;
+      resolved_experiences: number;
+      open_positions: number;
+    };
+  };
 };

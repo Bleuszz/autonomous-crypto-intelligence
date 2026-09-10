@@ -32,4 +32,8 @@ public/og.jpg
 pglite-debug*
 .pglite-test/
 .project_id
+runtime/
+backups/
+CURRENT_PUBLIC_URL.txt
+.env.seven-day
 .node_modules.lock

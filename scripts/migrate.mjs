@@ -19,6 +19,10 @@ import pg from "pg";
 import { pendingMigrations } from "./migration-plan.mjs";
 
 const databaseUrl = process.env.DATABASE_URL;
+if (process.env.SKIP_DB_MIGRATE === "1") {
+  console.log("[migrate] explicitly skipped during image build.");
+  process.exit(0);
+}
 if (!databaseUrl) {
   console.log(
     "[migrate] DATABASE_URL not set — skipping (the PGLite fallback migrates itself).",

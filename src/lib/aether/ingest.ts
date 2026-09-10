@@ -98,6 +98,7 @@ import {
 import { runResearch } from "./research";
 import { loadRuntimeSecrets } from "./secrets";
 import { startDeskScheduler } from "./scheduler";
+import { ensureExperiment, getRuntimeStatus, markHeartbeat } from "./runtime";
 import { getXIntelligence, startXMarketStream } from "./x-market-intelligence";
 import { getTrainingDashboard, persistEventDecayFromNews, runTrainingJobs } from "./training";
 import { persistTrainingExperience } from "./learning/jobs.ts";
@@ -440,23 +441,24 @@ async function applySell(opts: {
   cash += proceeds;
   realized += proceeds - costBasis;
   const oid = rid();
-  await sql.query(
-    `insert into paper_orders (id, portfolio_id, asset_id, side, type, status, requested_notional_usd, submitted_at, available_at, reason, latency_ms, assumed_mid)
-     values ($1,$2,$3,'sell','market','filled',$4,now(),now(),$5,$6,$7)`,
-    [oid, DEFAULT_PORTFOLIO_ID, pos.asset_id, notional, intent.reason.slice(0, 240), fill.latencyMs, mark],
-  );
-  await sql.query(
-    `insert into paper_fills (id, order_id, portfolio_id, asset_id, side, qty, price, notional_usd, fee_usd, slippage_bps, gas_usd, filled_at, model)
-     values ($1,$2,$3,$4,'sell',$5,$6,$7,$8,$9,$10,now(),$11)`,
-    [rid(), oid, DEFAULT_PORTFOLIO_ID, pos.asset_id, fill.qty, fill.price, fill.notionalUsd, fill.feeUsd, fill.slippageBps, fill.gasUsd, fill.model],
-  );
   const openedAt = opts.pos.opened_at ?? nowIso();
-  if (frac >= 0.999) {
-    await sql.query("delete from positions where id = $1", [pos.id]);
-    return { cash, realized, closed: true, fill, sellQty: qty, entryPrice: opts.pos.avg_price, realizedPnlUsd: proceeds - costBasis, openedAt };
-  }
-  await sql.query("update positions set qty = qty - $2, updated_at = now() where id = $1", [pos.id, fill.qty]);
-  return { cash, realized, closed: false, fill, sellQty: qty, entryPrice: opts.pos.avg_price, realizedPnlUsd: proceeds - costBasis, openedAt };
+  const closed = frac >= 0.999;
+  await sql.transaction(async (tx) => {
+    await tx.query(
+      `insert into paper_orders (id, portfolio_id, asset_id, side, type, status, requested_notional_usd, submitted_at, available_at, reason, latency_ms, assumed_mid)
+       values ($1,$2,$3,'sell','market','filled',$4,now(),now(),$5,$6,$7)`,
+      [oid, DEFAULT_PORTFOLIO_ID, pos.asset_id, notional, intent.reason.slice(0, 240), fill.latencyMs, mark],
+    );
+    await tx.query(
+      `insert into paper_fills (id, order_id, portfolio_id, asset_id, side, qty, price, notional_usd, fee_usd, slippage_bps, gas_usd, filled_at, model)
+       values ($1,$2,$3,$4,'sell',$5,$6,$7,$8,$9,$10,now(),$11)`,
+      [rid(), oid, DEFAULT_PORTFOLIO_ID, pos.asset_id, fill.qty, fill.price, fill.notionalUsd, fill.feeUsd, fill.slippageBps, fill.gasUsd, fill.model],
+    );
+    if (closed) await tx.query("delete from positions where id = $1", [pos.id]);
+    else await tx.query("update positions set qty = qty - $2, updated_at = now() where id = $1", [pos.id, fill.qty]);
+    await tx.query("update paper_portfolios set cash_usd=$2,realized_pnl_usd=$3,updated_at=now() where id=$1", [DEFAULT_PORTFOLIO_ID, cash, realized]);
+  });
+  return { cash, realized, closed, fill, sellQty: qty, entryPrice: opts.pos.avg_price, realizedPnlUsd: proceeds - costBasis, openedAt };
 }
 
 function clamp01(n: number): number {
@@ -899,25 +901,28 @@ async function paperTick(sql: Sql, ranked: RankedOpportunity[], signals: SignalD
     }
 
     cash -= cost;
-    await sql.query(
-      `insert into paper_orders (id, portfolio_id, asset_id, side, type, status, requested_notional_usd, submitted_at, available_at, reason, latency_ms, assumed_mid)
-       values ($1,$2,$3,'buy','market','filled',$4,now(),now(),$5,$6,$7)`,
-      [oid, DEFAULT_PORTFOLIO_ID, intent.assetId, size, intent.reason.slice(0, 240), latency, r.asset.priceUsd],
-    );
-    await sql.query(
-      `insert into paper_fills (id, order_id, portfolio_id, asset_id, side, qty, price, notional_usd, fee_usd, slippage_bps, gas_usd, filled_at, model)
-       values ($1,$2,$3,$4,'buy',$5,$6,$7,$8,$9,$10,now(),$11)`,
-      [rid(), oid, DEFAULT_PORTFOLIO_ID, intent.assetId, fill.qty, fill.price, fill.notionalUsd, fill.feeUsd, fill.slippageBps, fill.gasUsd, fill.model],
-    );
-    await sql.query(
-      `insert into positions (id, portfolio_id, asset_id, qty, avg_price, opened_at, updated_at)
-       values ($1,$2,$3,$4,$5,now(),now())
-       on conflict (portfolio_id, asset_id) do update set
-         qty = positions.qty + excluded.qty,
-         avg_price = (positions.avg_price * positions.qty + excluded.avg_price * excluded.qty) / nullif(positions.qty + excluded.qty, 0),
-         updated_at = now()`,
-      [rid(), DEFAULT_PORTFOLIO_ID, intent.assetId, fill.qty, fill.price],
-    );
+    await sql.transaction(async (tx) => {
+      await tx.query(
+        `insert into paper_orders (id, portfolio_id, asset_id, side, type, status, requested_notional_usd, submitted_at, available_at, reason, latency_ms, assumed_mid)
+         values ($1,$2,$3,'buy','market','filled',$4,now(),now(),$5,$6,$7)`,
+        [oid, DEFAULT_PORTFOLIO_ID, intent.assetId, size, intent.reason.slice(0, 240), latency, r.asset.priceUsd],
+      );
+      await tx.query(
+        `insert into paper_fills (id, order_id, portfolio_id, asset_id, side, qty, price, notional_usd, fee_usd, slippage_bps, gas_usd, filled_at, model)
+         values ($1,$2,$3,$4,'buy',$5,$6,$7,$8,$9,$10,now(),$11)`,
+        [rid(), oid, DEFAULT_PORTFOLIO_ID, intent.assetId, fill.qty, fill.price, fill.notionalUsd, fill.feeUsd, fill.slippageBps, fill.gasUsd, fill.model],
+      );
+      await tx.query(
+        `insert into positions (id, portfolio_id, asset_id, qty, avg_price, opened_at, updated_at)
+         values ($1,$2,$3,$4,$5,now(),now())
+         on conflict (portfolio_id, asset_id) do update set
+           qty = positions.qty + excluded.qty,
+           avg_price = (positions.avg_price * positions.qty + excluded.avg_price * excluded.qty) / nullif(positions.qty + excluded.qty, 0),
+           updated_at = now()`,
+        [rid(), DEFAULT_PORTFOLIO_ID, intent.assetId, fill.qty, fill.price],
+      );
+      await tx.query("update paper_portfolios set cash_usd=$2,updated_at=now() where id=$1", [DEFAULT_PORTFOLIO_ID, cash]);
+    });
     try {
       await sql.query(
         "update positions set peak_mark_usd = $2, last_mark_usd = $2 where portfolio_id = $1 and asset_id = $3",
@@ -1190,6 +1195,7 @@ function parseJsonArray(v: unknown): string[] {
 async function ingestOnce(): Promise<void> {
   await loadRuntimeSecrets();
   const sql = await getSql();
+  await markHeartbeat(sql, "ingestion", "RUNNING", false);
   try {
     await ensureLearnerVersion(sql);
   } catch {
@@ -1591,6 +1597,8 @@ async function ingestOnce(): Promise<void> {
       errors.push(`data-quality: ${e instanceof Error ? e.message : "fail"}`);
     }
 
+    await markHeartbeat(sql, "scoring", "OK", true, { assets: ranked.length });
+    await markHeartbeat(sql, "decision_cycle", "OK", true, { candidates: ranked.length });
     const gen = generateSignals({
       ranked,
       news: newsDto,
@@ -1813,10 +1821,15 @@ async function ingestOnce(): Promise<void> {
     } catch (e) {
       errors.push(`fx: ${e instanceof Error ? e.message : "DATA UNAVAILABLE: GBPUSD"}`);
     }
+    await ensureExperiment(sql);
     await paperTick(sql, ranked, signalDto, regime);
+    await markHeartbeat(sql, "paper_tick", "OK", true, { openSignals: signalDto.length });
+    await markHeartbeat(sql, "outcome_resolution", "OK", true);
     try {
       await runLearningJobs(sql);
+      await markHeartbeat(sql, "learning", "OK", true);
     } catch (e) {
+      await markHeartbeat(sql, "learning", "FAILED", false, { error: sanitizePublicError(e instanceof Error ? e.message : "fail") });
       errors.push(`learning jobs: ${e instanceof Error ? e.message : "fail"}`);
     }
     try {
@@ -1883,6 +1896,7 @@ async function ingestOnce(): Promise<void> {
       `update ingest_runs set finished_at=now(), status='ok', assets_upserted=$2, signals_created=$3, errors=$4::jsonb, duration_ms=$5 where id=$1`,
       [runId, merged.size, signalsCreated, JSON.stringify(errors.map((e) => sanitizePublicError(e) ?? e)), Date.now() - t0],
     );
+    await markHeartbeat(sql, "ingestion", "OK", true, { assets: merged.size, signals: signalsCreated, errors: errors.length });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "ingest failed";
     errors.push(msg);
@@ -1890,6 +1904,7 @@ async function ingestOnce(): Promise<void> {
       `update ingest_runs set finished_at=now(), status='error', errors=$2::jsonb, duration_ms=$3 where id=$1`,
       [runId, JSON.stringify(errors), Date.now() - t0],
     );
+    await markHeartbeat(sql, "ingestion", "FAILED", false, { error: sanitizePublicError(msg) });
     throw e;
   }
 }
@@ -1929,11 +1944,13 @@ export async function ensureIngested(force = false): Promise<OverviewDTO> {
 }
 
 if (typeof window === "undefined") {
-  startDeskScheduler(() => {
-    void ensureIngested(false).catch((err) => {
-      console.error("[aether] scheduled ingest failed:", err instanceof Error ? err.message : err);
+  if (process.env.DISABLE_IN_PROCESS_SCHEDULER !== "true") {
+    startDeskScheduler(() => {
+      void ensureIngested(false).catch((err) => {
+        console.error("[aether] scheduled ingest failed:", err instanceof Error ? err.message : err);
+      });
     });
-  });
+  }
   void startXMarketStream();
 }
 
@@ -2040,6 +2057,7 @@ export async function getSystem(): Promise<SystemDTO> {
   const alerts = await sql.query<Record<string, unknown>>("select id, kind, severity, title, created_at from alerts order by created_at desc limit 30");
   const live = evaluateLiveGates();
   const meta = await loadLatestDigestMeta();
+  const runtime = await getRuntimeStatus(sql);
   return {
     tradingMode: "PAPER",
     liveGates: live.gates,
@@ -2062,6 +2080,7 @@ export async function getSystem(): Promise<SystemDTO> {
     pollMs: INGEST_POLL_MS,
     lastDigestAt: meta.generatedAt,
     digestSchedule: "08:00 and 20:00 Europe/London — emailed privately, never shown on this public desk",
+    runtime,
   };
 }
 export async function getStrategies() {

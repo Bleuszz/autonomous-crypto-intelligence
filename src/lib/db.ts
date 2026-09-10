@@ -35,6 +35,7 @@ export interface Sql {
     text: string,
     params?: unknown[],
   ): Promise<T[]>;
+  transaction<T>(fn: (sql: Sql) => Promise<T>): Promise<T>;
 }
 
 /**
@@ -84,6 +85,7 @@ function toSql(run: Run): Sql {
   }) as unknown as Sql;
   sql.query = <T = Record<string, unknown>>(text: string, params: unknown[] = []) =>
     run<T>(text, params);
+  sql.transaction = <T>(fn: (tx: Sql) => Promise<T>) => fn(sql);
   return sql;
 }
 
@@ -98,10 +100,34 @@ function createNeonSql(): Promise<Sql> {
     types.setTypeParser(OID_TIMESTAMP, identity);
     types.setTypeParser(OID_TIMESTAMPTZ, identity);
     const pool = new Pool({ connectionString: databaseUrl });
-    return toSql(async <T>(text: string, params: unknown[]) => {
+    pool.on("error", (error) => {
+      // PostgreSQL restarts terminate idle sockets. Keep the process alive; the
+      // pool creates a fresh connection on the next query.
+      console.error("[db] idle connection dropped; reconnecting on next query:", error.message);
+    });
+    const sql = toSql(async <T>(text: string, params: unknown[]) => {
       const res = await pool.query(text, params);
       return res.rows as T[];
     });
+    sql.transaction = async <T>(fn: (tx: Sql) => Promise<T>): Promise<T> => {
+      const client = await pool.connect();
+      const tx = toSql(async <R>(text: string, params: unknown[]) => {
+        const res = await client.query(text, params);
+        return res.rows as R[];
+      });
+      try {
+        await client.query("begin");
+        const result = await fn(tx);
+        await client.query("commit");
+        return result;
+      } catch (error) {
+        await client.query("rollback");
+        throw error;
+      } finally {
+        client.release();
+      }
+    };
+    return sql;
   })().catch((err) => {
     globalRef.__pgSqlPromise__ = undefined;
     throw err;
@@ -167,10 +193,16 @@ async function createPgliteSql(): Promise<Sql> {
   globalRef.__pgliteMigrateChain__ = pass;
   await pass;
 
-  return toSql(async <T>(text: string, params: unknown[]) => {
+  const sql = toSql(async <T>(text: string, params: unknown[]) => {
     const result = await pg.query<T>(text, params);
     return result.rows;
   });
+  sql.transaction = <T>(fn: (tx: Sql) => Promise<T>) =>
+    pg.transaction(async (pgtx) => fn(toSql(async <R>(text: string, params: unknown[]) => {
+      const result = await pgtx.query<R>(text, params);
+      return result.rows;
+    })));
+  return sql;
 }
 
 let sqlPromise: Promise<Sql> | null = null;

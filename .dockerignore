@@ -1,0 +1,13 @@
+.git
+.github
+node_modules
+.output
+.vercel
+.env
+.env.*
+runtime
+backups
+secrets
+coverage
+*.log
+*.sqlite*

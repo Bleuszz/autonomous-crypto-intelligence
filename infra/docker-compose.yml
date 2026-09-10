@@ -1,17 +1,103 @@
-# Optional self-host. The hosted Aether app already runs without Docker.
-# Live trading remains disabled unless every gate in docs/TRADING.md is met.
+name: autonomous-crypto-intelligence
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
 
 services:
   postgres:
-    image: postgres:16
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    env_file:
+      - ../runtime/seven-day.env
     environment:
       POSTGRES_DB: aether
       POSTGRES_USER: aether
-      POSTGRES_PASSWORD: aether
-    ports:
-      - "5432:5432"
+      POSTGRES_INITDB_ARGS: "--data-checksums"
     volumes:
-      - aether_pg:/var/lib/postgresql/data
+      - crypto_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aether -d aether"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+    logging: *default-logging
+    networks: [backend]
+
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ../runtime/seven-day.env
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATABASE_URL: postgresql://aether:${POSTGRES_PASSWORD}@postgres:5432/aether
+      TRADING_MODE: PAPER
+      ENABLE_LIVE_TRADING: "false"
+      LIVE_EXECUTION_UNLOCK: ""
+      VITE_AUTH_ENABLED: "false"
+      DISABLE_IN_PROCESS_SCHEDULER: "true"
+      SEVEN_DAY_EXPERIMENT_ID: ${SEVEN_DAY_EXPERIMENT_ID:-seven-day-local-2026-09}
+      APP_COMMIT: ${APP_COMMIT:-unknown}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:18080:3000"
+    volumes:
+      - ../runtime:/app/runtime
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 12
+      start_period: 45s
+    logging: *default-logging
+    networks: [backend, edge]
+
+  engine:
+    image: autonomous-crypto-intelligence-app:latest
+    restart: unless-stopped
+    command: node scripts/engine-worker.mjs
+    env_file:
+      - ../runtime/seven-day.env
+    environment:
+      ENGINE_APP_URL: http://app:3000
+      INGEST_POLL_MS: "180000"
+    depends_on:
+      app:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://app:3000/engine-healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 180s
+    logging: *default-logging
+    networks: [backend]
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    restart: unless-stopped
+    command: tunnel --no-autoupdate --protocol http2 --url http://app:3000
+    depends_on:
+      app:
+        condition: service_healthy
+    logging: *default-logging
+    networks: [edge]
+
+networks:
+  backend:
+    internal: true
+  edge:
 
 volumes:
-  aether_pg:
+  crypto_postgres_data:
+    name: autonomous_crypto_postgres_data
