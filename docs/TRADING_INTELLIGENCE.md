@@ -27,6 +27,10 @@ RAW MARKET DATA
 - Technical evidence may veto or delay a buy (`WAIT` / `REJECT`). It never invents an entry the desk did not propose.
 - Ablation and walk-forward helpers report `INSUFFICIENT EVIDENCE` when the sample is too small. This build does not claim that RSI or any other indicator improves expectancy.
 
+## Indicators
+
+Complementary set only: RSI, MACD, EMA-21, SMA-20, ATR-14, Bollinger 20/2, VWAP (when volume exists), ADX-14, OBV (when volume exists). Each reading stores timeframe, timestamp, window, version, freshness and source.
+
 ## Capital
 
 - Research book: **£100,000** — active paper laboratory, many simultaneous legitimate positions when opportunities exist.
@@ -36,3 +40,7 @@ RAW MARKET DATA
 ## Dashboard
 
 `/trading` shows structure, indicators, S/R, volume/liquidity availability, conflict scores, the technical decision, and the dual capital reminder. Empty tapes render `NO DATA` / `UNAVAILABLE`.
+
+## Learning dashboard reliability
+
+`learner_recommendation` JSON-null / missing `action` is coerced to `WAIT` + `NO DATA` in `src/lib/aether/learning/recommendation.ts`. Wire `loadLearnerPredictions` through `coerceLearnerRecommendation` so a single malformed snapshot cannot crash `/learning`.
