@@ -1,8 +1,11 @@
 import { createServerFn } from "@tanstack/react-start";
 import {
+  changeLearnerModeData,
   ensureIngested,
   getCopySignals,
   getDetectedEvents,
+  getLearningDashboardData,
+  getLearnerModeData,
   getNews,
   getOpportunities,
   getOverview,
@@ -93,6 +96,20 @@ export const postBacktest = createServerFn({ method: "POST" })
 export const fetchBacktests = createServerFn({ method: "GET" }).handler(async () => {
   return listBacktests();
 });
+
+export const fetchLearningDashboard = createServerFn({ method: "GET" }).handler(async () => {
+  return getLearningDashboardData();
+});
+
+export const fetchLearnerMode = createServerFn({ method: "GET" }).handler(async () => {
+  return getLearnerModeData();
+});
+
+export const postLearnerMode = createServerFn({ method: "POST" })
+  .validator((input: { mode: "DISABLED" | "SHADOW" | "ACTIVE"; password: string }) => input)
+  .handler(async ({ data }) => {
+    return changeLearnerModeData(data);
+  });
 
 export const postPaperTrade = createServerFn({ method: "POST" })
   .validator((input: { assetId: string; side: "buy" | "sell"; notionalUsd: number }) => input)

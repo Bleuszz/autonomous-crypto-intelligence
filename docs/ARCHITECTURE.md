@@ -10,7 +10,11 @@ ingest (HTTP sources, retries, health)
                 → event intelligence + wallet intelligence
                     → strategy registry → signals
                         → paper broker (latency, impact, fees)
-                            → audit tables + dashboard
+                            → decision / outcome snapshots
+                                → reward engine + attribution + pattern discovery
+                                    → shadow-mode contextual learner
+                                        → champion/challenger validation + rollback
+                                            → audit tables + dashboard
 ```
 
 ## Modules (`src/lib/aether`)
@@ -26,13 +30,14 @@ ingest (HTTP sources, retries, health)
 | `backtest.ts` | walk-forward, next-open fills, benchmark, random baseline, rolling windows |
 | `events.ts` | monitored-entity event detection from news/Polymarket |
 | `wallet-intelligence.ts` | Polymarket wallet scoring + paper-only copy signals |
+| `learning/*` | reward engine, pattern discovery, shadow-mode contextual learner, champion/challenger promotion |
 | `live.ts` | fail-closed live gates (hard-disabled) |
 | `research.ts` | user-initiated LLM, sectioned output |
 | `ingest.ts` | orchestration + persistence |
 
 ## Data
 
-Schema lives in `migrations/0002_aether.sql` plus `0003_desk_upgrade.sql` and `0004_events_wallet_intelligence.sql`. Preview uses embedded PGLite; production uses Neon/Postgres via `DATABASE_URL`. Rows are unowned (no accounts). Do not store personal data or secrets in them.
+Schema lives in `migrations/0002_aether.sql`, `0003_desk_upgrade.sql`, `0004_events_wallet_intelligence.sql`, and `0005_learning_engine.sql`. Preview uses embedded PGLite; production uses Neon/Postgres via `DATABASE_URL`. Rows are unowned (no accounts). Do not store personal data or secrets in them.
 
 Every time-sensitive record carries `observed_at` / `source_timestamp` / `ingested_at` as available. Freshness is a feature, not a footnote.
 
@@ -44,7 +49,9 @@ Every time-sensitive record carries `observed_at` / `source_timestamp` / `ingest
 4. On-chain security only for a shortlist of DEX candidates
 5. Social/news entity join + event intelligence
 6. Polymarket wallet intelligence (informational copy signals)
-7. LLM only when you press **Run research**
+7. Completed paper round-trips feed the reward engine and pattern learner (shadow mode)
+8. Champion/challenger pipeline protects any learned change before it can influence decisions
+9. LLM only when you press **Run research**
 
 ## Live trading
 

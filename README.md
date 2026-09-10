@@ -16,12 +16,29 @@ Private repo: [github.com/Bleuszz/autonomous-crypto-intelligence](https://github
 - Generates versioned strategy signals; signal deduplication includes the strategy version
 - Paper-trades with latency, impact, fees and gas; P&L is tracked from completed round trips
 - Walk-forward backtests on Kraken daily candles with buy-and-hold benchmark, random baseline, and rolling windows
+- Reward + adaptive learning engine: immutable decision/outcome snapshots, normalized reward decomposition, feature attribution, pattern discovery with sample-size gating, shadow-mode contextual learner, champion/challenger promotion pipeline with rollback
 - Optional Grok research reports split into FACT / INFERENCE / UNCERTAINTY / SPECULATION
 - Official X recent-search on a hard **$5/week** budget (8 calls/day, 3 hours apart)
 - Extra free tapes: OKX/Binance funding, DefiLlama TVL, mempool fees, Reddit, extra RSS, DXY/SPX/gold, CoinCap
 - Private 08:00 / 20:00 Europe/London desk notes (recipient never shown on this public site)
 
 X API keys live in gitignored `secrets/runtime.env`. The spend ledger is `secrets/x-budget.json` so a restart cannot reset the cap.
+
+## Learner controls
+
+The `/learning` dashboard is the control centre for the adaptive learner. It shows prediction counts, accuracy by action and confidence, reward analytics, regime/asset breakdowns, pattern intelligence, champion/challenger status, and a password-protected control panel.
+
+The learner can be in one of three server-persisted states:
+
+| State | Behaviour |
+| --- | --- |
+| `DISABLED` | Learner is not consulted; baseline deterministic system runs normally. |
+| `SHADOW` (default) | Learner records predictions and evaluates them, but does not influence paper trades. |
+| `ACTIVE` | Learner may override the paper-trading decision layer (currently `ENTER` → `REJECT`/`WAIT`) while still passing hard risk gates first. Live execution remains impossible. |
+
+State changes on `/learning` require the server-side control password. The password is read from `LEARNING_CONTROL_PASSWORD`; for local/private use the documented default is `1234` when no env var is set. The password is never rendered, logged, stored in the database, or sent to the browser. Change attempts are written to `learner_control_audit` without the password.
+
+See [docs/LEARNING.md](docs/LEARNING.md) for the full metrics reference.
 
 ## Trading mode
 
@@ -56,6 +73,7 @@ npm run dev
 - [Operations](docs/OPERATIONS.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 - [Event + Wallet Intelligence](docs/EVENTS_WALLET_INTELLIGENCE.md)
+- [Reward + Adaptive Learning Engine](docs/LEARNING.md)
 
 ## Honesty
 
